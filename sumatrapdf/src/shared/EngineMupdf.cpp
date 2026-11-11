@@ -8513,6 +8513,180 @@ static void FixReflowBlankGlyphs(fz_stext_block* block) {
     }
 }
 
+struct ReflowVectorArea {
+    fz_rect bounds;
+    fz_stext_block* first;
+    int order;
+    int count;
+};
+
+static void ReflowVectorBlocks(fz_stext_block* block, Vec<fz_stext_block*>& leaves, Vec<fz_rect>& tables) {
+    for (; block; block = block->next) {
+        if (block->type != FZ_STEXT_BLOCK_STRUCT) {
+            VecAppend(leaves, block);
+            continue;
+        }
+        if (!block->u.s.down) continue;
+        if (block->u.s.down->standard == FZ_STRUCTURE_TABLE) {
+            VecAppend(tables, block->bbox);
+            continue;
+        }
+        ReflowVectorBlocks(block->u.s.down->first_block, leaves, tables);
+    }
+}
+
+static bool ReflowRectsNear(fz_rect a, fz_rect b) {
+    constexpr float gap = 16.f;
+    return a.x0 <= b.x1 + gap && a.x1 + gap >= b.x0 && a.y0 <= b.y1 + gap && a.y1 + gap >= b.y0;
+}
+
+static bool ReflowInside(fz_rect outer, fz_rect inner) {
+    return inner.x0 >= outer.x0 && inner.y0 >= outer.y0 && inner.x1 <= outer.x1 && inner.y1 <= outer.y1;
+}
+
+static fz_image* ReflowVectorImage(fz_context* ctx, fz_page* page, fz_rect bounds, int pixelBudget) {
+    float width = bounds.x1 - bounds.x0;
+    float height = bounds.y1 - bounds.y0;
+    constexpr float maxScale = 3.f;
+    constexpr float maxDimension = 4096.f;
+    float scale = fminf(maxScale, sqrtf((float)pixelBudget / (width * height)));
+    scale = fminf(scale, maxDimension / fmaxf(width, height));
+    fz_matrix transform = fz_scale(scale, scale);
+    fz_irect pixels = fz_round_rect(fz_transform_rect(bounds, transform));
+    fz_pixmap* pixmap = nullptr;
+    fz_device* device = nullptr;
+    fz_image* image = nullptr;
+    fz_var(pixmap);
+    fz_var(device);
+    fz_var(image);
+    fz_try(ctx) {
+        pixmap = fz_new_pixmap_with_bbox(ctx, fz_device_rgb(ctx), pixels, nullptr, 0);
+        fz_clear_pixmap_with_value(ctx, pixmap, 255);
+        device = fz_new_draw_device(ctx, transform, pixmap);
+        // Replay the original composition: arrows, text, masks and transparency
+        // must remain together, rather than exporting the paths individually.
+        fz_run_page(ctx, page, device, fz_identity, nullptr);
+        fz_close_device(ctx, device);
+        image = fz_new_image_from_pixmap(ctx, pixmap, nullptr);
+    }
+    fz_always(ctx) {
+        fz_drop_device(ctx, device);
+        fz_drop_pixmap(ctx, pixmap);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return image;
+}
+
+static void ClearReflowBlock(fz_context* ctx, fz_stext_block* block) {
+    if (block->type == FZ_STEXT_BLOCK_TEXT) {
+        for (fz_stext_line* line = block->u.t.first_line; line; line = line->next) {
+            for (fz_stext_char* ch = line->first_char; ch; ch = ch->next) {
+                fz_drop_font(ctx, ch->font);
+                ch->font = nullptr;
+            }
+        }
+    } else if (block->type == FZ_STEXT_BLOCK_IMAGE) {
+        fz_drop_image(ctx, block->u.i.image);
+    }
+    // Keep the pool-owned list node so its parent's links remain valid.
+    block->type = FZ_STEXT_BLOCK_VECTOR;
+    block->u = {};
+}
+
+static bool PreserveReflowVectors(fz_context* ctx, fz_page* page, fz_stext_page* text) {
+    Vec<fz_stext_block*> leaves;
+    Vec<fz_rect> tables;
+    ReflowVectorBlocks(text->first_block, leaves, tables);
+    Vec<ReflowVectorArea> areas;
+    float pageArea = (text->mediabox.x1 - text->mediabox.x0) * (text->mediabox.y1 - text->mediabox.y0);
+    constexpr int maxAreas = 2048;
+    for (int order = 0; order < len(leaves); order++) {
+        fz_stext_block* block = leaves[order];
+        if (block->type != FZ_STEXT_BLOCK_VECTOR) continue;
+        auto flags = block->u.v.flags;
+        if (!(block->u.v.argb >> 24) ||
+            (flags & (FZ_STEXT_VECTOR_IS_HIGHLIGHT | FZ_STEXT_VECTOR_IS_UNDERLINE | FZ_STEXT_VECTOR_IS_STRIKEOUT)))
+            continue;
+        if (!(flags & FZ_STEXT_VECTOR_IS_STROKED) && block->u.v.argb == 0xffffffff) continue;
+        fz_rect rect = block->bbox;
+        float area = (rect.x1 - rect.x0) * (rect.y1 - rect.y0);
+        if ((flags & FZ_STEXT_VECTOR_IS_RECTANGLE) && area > pageArea * .9f) continue;
+        ReflowVectorArea next{rect, block, order, 1};
+        for (int i = 0; i < len(areas);) {
+            if (!ReflowRectsNear(next.bounds, areas[i].bounds) && len(areas) < maxAreas) {
+                i++;
+                continue;
+            }
+            next.bounds = fz_union_rect(next.bounds, areas[i].bounds);
+            next.count += areas[i].count;
+            if (areas[i].order < next.order) {
+                next.first = areas[i].first;
+                next.order = areas[i].order;
+            }
+            VecRemoveAt(areas, i);
+            i = 0;
+        }
+        VecAppend(areas, next);
+    }
+    Vec<ReflowVectorArea> figures;
+    for (auto candidate : areas) {
+        fz_rect bounds = candidate.bounds;
+        float width = bounds.x1 - bounds.x0;
+        float height = bounds.y1 - bounds.y0;
+        if (width < 24 || height < 16 || (candidate.count < 2 && width * height < 2500)) continue;
+        // Include labels whose centers belong to the drawing, without pulling
+        // in overlapping page-wide watermarks or nearby body paragraphs.
+        for (auto* block : leaves) {
+            if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
+            fz_rect label = block->bbox;
+            float x = (label.x0 + label.x1) * .5f;
+            float y = (label.y0 + label.y1) * .5f;
+            if (x >= candidate.bounds.x0 && x <= candidate.bounds.x1 && y >= candidate.bounds.y0 &&
+                y <= candidate.bounds.y1)
+                bounds = fz_union_rect(bounds, label);
+        }
+        bounds.x0 -= 2;
+        bounds.y0 -= 2;
+        bounds.x1 += 2;
+        bounds.y1 += 2;
+        bounds = fz_intersect_rect(bounds, text->mediabox);
+        bool overlapsTable = false;
+        for (auto table : tables) {
+            if (!fz_is_empty_rect(fz_intersect_rect(bounds, table))) {
+                overlapsTable = true;
+                break;
+            }
+        }
+        if (overlapsTable || fz_is_empty_rect(bounds)) continue;
+        candidate.bounds = bounds;
+        VecAppend(figures, candidate);
+    }
+    constexpr int maxFigures = 64;
+    if (len(figures) > maxFigures) return false;
+    constexpr int pagePixelBudget = 8 * 1024 * 1024;
+    for (auto figure : figures) {
+        fz_image* image = ReflowVectorImage(ctx, page, figure.bounds, pagePixelBudget / len(figures));
+        if (!image) continue;
+        for (auto* block : leaves) {
+            if (block != figure.first && ReflowInside(figure.bounds, block->bbox)) ClearReflowBlock(ctx, block);
+        }
+        auto* block = figure.first;
+        block->type = FZ_STEXT_BLOCK_IMAGE;
+        block->bbox = figure.bounds;
+        block->u = {};
+        block->u.i.transform = {figure.bounds.x1 - figure.bounds.x0,
+                                0,
+                                0,
+                                figure.bounds.y1 - figure.bounds.y0,
+                                figure.bounds.x0,
+                                figure.bounds.y0};
+        block->u.i.image = image;
+    }
+    return true;
+}
+
 static void WriteReflowPage(fz_context* ctx, void* state, const void* data, size_t size) {
     auto* buffer = (fz_buffer*)state;
     size_t current = fz_buffer_storage(ctx, buffer, nullptr);
@@ -8564,6 +8738,8 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         if (result.displayText) opts.flags |= FZ_STEXT_ACCURATE_BBOXES;
         text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
         if (result.displayText) FixReflowBlankGlyphs(text->first_block);
+        if (!PreserveReflowVectors(ctx, page->page, text))
+            fz_throw(ctx, FZ_ERROR_LIMIT, "This page contains too many separate drawings to reflow.");
         buffer = fz_new_buffer(ctx, 8192);
         output = fz_new_output(ctx, 8192, buffer, WriteReflowPage, nullptr, nullptr);
         fz_print_stext_page_as_xhtml(ctx, output, text, pageNo);

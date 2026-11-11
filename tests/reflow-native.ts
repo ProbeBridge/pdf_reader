@@ -638,6 +638,19 @@ try {
   );
   sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
   await waitPage(flow, 2, "toggle original/reflow");
+  const drawing: any = await nativeCall(flow, "page", { page: 3 });
+  assert.equal(drawing.error, "");
+  assert.match(drawing.sourceText, /VectorInput/);
+  assert.match(drawing.sourceText, /VectorProcess/);
+  assert.match(drawing.sourceText, /VectorOutput/);
+  assert.ok(
+    (drawing.html.match(/<img[\s>]/g) || []).length >= 2,
+    "an untagged vector diagram must survive beside the page's raster image",
+  );
+  assert.ok(
+    !drawing.html.includes("VectorInput"),
+    "diagram labels must be included in its image without duplicate loose text",
+  );
   // Queue actual native work, then switch controller while its response may be
   // pending. The fixture's large third-page image makes this path substantive.
   await queuePendingExtraction(

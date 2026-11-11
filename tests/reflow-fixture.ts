@@ -120,6 +120,14 @@ export function makeReflowFixture(variant = "primary"): Buffer {
       54,
       710,
     ) +
+    text("Vector Block Diagram", 54, 674, 18) +
+    "q 0 G 0.8 w 0.6 0.8 1 rg 54 570 110 50 re B " +
+    "0.84 0.89 0.75 rg 240 510 110 50 re B " +
+    "1 0.9 0.6 rg 430 570 110 50 re B " +
+    "0 0 0 RG 164 595 m 240 535 l S 350 535 m 430 595 l S Q\n" +
+    text("VectorInput", 64, 590, 12) +
+    text("VectorProcess", 248, 530, 12) +
+    text("VectorOutput", 440, 590, 12) +
     "q 504 0 0 252 54 180 cm /Heavy Do Q\n";
   const stream = (content: string) =>
     `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`;

@@ -215,6 +215,114 @@ try {
       { number, sourceText: page.sourceText, displayText: page.displayText },
     );
     result.ui = ui;
+    if (number === 334 && args.includes("--vector-diagram")) {
+      result.diagram = await flow.evaluate(async () => {
+        const content = document.querySelector(
+          '.source-page[data-page="334"] .page-content',
+        )!;
+        const headings = [...content.querySelectorAll("h1,h2,h3,h4,h5,h6,p")];
+        const heading = headings.find((element) =>
+          /5\.2\.2\s+Block\s+Diagram/.test(element.textContent || ""),
+        );
+        const next = headings.find((element) =>
+          /5\.2\.3\s+Register\s+List/.test(element.textContent || ""),
+        );
+        if (!heading || !next)
+          throw Error("Actual Block Diagram section headings are missing");
+        const images = [...content.querySelectorAll("img")].filter(
+          (image) =>
+            !!(
+              heading.compareDocumentPosition(image) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+            ) &&
+            !!(
+              image.compareDocumentPosition(next) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+            ),
+        );
+        for (const image of images) {
+          await image.decode();
+          const canvas = document.createElement("canvas");
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext("2d")!;
+          context.drawImage(image, 0, 0);
+          const pixels = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          ).data;
+          let blue = 0,
+            yellow = 0,
+            green = 0,
+            black = 0;
+          for (let i = 0; i < pixels.length; i += 4) {
+            const r = pixels[i],
+              g = pixels[i + 1],
+              b = pixels[i + 2];
+            if (r > 120 && r < 180 && g > 175 && g < 225 && b > 235) blue++;
+            if (r > 235 && g > 205 && g < 245 && b > 125 && b < 190) yellow++;
+            if (r > 185 && r < 230 && g > 205 && g < 240 && b > 160 && b < 210)
+              green++;
+            if (r < 65 && g < 65 && b < 65) black++;
+          }
+          if (blue > 100 && yellow > 100 && green > 100 && black > 100) {
+            (window as any).manualDiagram = image;
+            return {
+              width: canvas.width,
+              height: canvas.height,
+              blue,
+              yellow,
+              green,
+              black,
+            };
+          }
+        }
+        return null;
+      });
+      assert.ok(
+        result.diagram,
+        "5.2.2 must contain the actual rendered vector Block Diagram after reflow",
+      );
+      for (const color of ["blue", "yellow", "green", "black"])
+        assert.ok(
+          result.diagram[color] > 100,
+          `Block Diagram must retain its ${color} nodes/text/arrows`,
+        );
+      result.diagramZoom = [];
+      for (const zoom of [200, 400]) {
+        sendCommandSync(app.frame, cmdId(`CmdZoom${zoom}`));
+        await flow.waitForFunction(
+          (zoom: number) =>
+            document
+              .querySelector("#page-label")
+              ?.textContent?.includes(`${zoom}%`),
+          zoom,
+        );
+        const bounds = await flow.evaluate(() => {
+          const image = (window as any).manualDiagram as HTMLImageElement;
+          image.scrollIntoView({ block: "center" });
+          const rect = image.getBoundingClientRect();
+          return {
+            width: rect.width,
+            height: rect.height,
+            available: image.closest(".page-content")!.clientWidth,
+            ratio: image.naturalWidth / image.naturalHeight,
+            documentWidth: document.documentElement.clientWidth,
+            scrollWidth: document.documentElement.scrollWidth,
+          };
+        });
+        assert.ok(bounds.width <= bounds.available + 1);
+        assert.ok(bounds.scrollWidth <= bounds.documentWidth + 1);
+        assert.ok(Math.abs(bounds.width / bounds.height - bounds.ratio) < 0.01);
+        result.diagramZoom.push({ zoom, ...bounds });
+        await captureWindowToPng(
+          app.frame,
+          join(output, `diagram-${zoom}.png`),
+        );
+      }
+    }
     assert.equal(
       ui.fffd,
       result.displayFFFD,
