@@ -23,6 +23,11 @@ export function safeReflowContent(html, owner = document) {
         continue;
       }
       const element = owner.createElement(tag);
+      if (tag === "div") {
+        const box = (child.getAttribute("data-source-box") || "").split(",").map(Number);
+        if (box.length === 4 && box.every(Number.isFinite) && box[2] > 0 && box[3] > 0)
+          element.dataset.sourceBox = box.join(",");
+      }
       if (tag === "img") {
         const src = child.getAttribute("src") || "";
         if (!/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,[a-z0-9+/=\s]+$/i.test(src)) continue;

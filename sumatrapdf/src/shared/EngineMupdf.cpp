@@ -8885,6 +8885,101 @@ static void FixReflowReadingOrder(fz_stext_page* page) {
     }
 }
 
+static fz_stext_char* ReflowLineStart(fz_stext_line* line) {
+    auto* ch = line ? line->first_char : nullptr;
+    while (ch && (ch->c == ' ' || ch->c == '\t')) ch = ch->next;
+    return ch;
+}
+
+static bool ReflowItemStart(fz_stext_line* line) {
+    int chars[16] = {};
+    int count = 0;
+    for (auto* ch = ReflowLineStart(line); ch && count < dimof(chars); ch = ch->next) chars[count++] = ch->c;
+    int c = chars[0];
+    if (c == 0x2022 || c == 0x25cf || c == 0x25aa || c == 0xf06c ||
+        ((c == '-' || c == 0x2013 || c == 0x2014) && chars[1] == ' '))
+        return true;
+    int i = c == '(' || c == '[' ? 1 : 0;
+    int start = i;
+    while (i < count && chars[i] >= '0' && chars[i] <= '9') i++;
+    if (i == start && ((chars[i] >= 'a' && chars[i] <= 'z') || (chars[i] >= 'A' && chars[i] <= 'Z'))) i++;
+    if (i > start && i + 1 < count && (chars[i] == '.' || chars[i] == ')' || chars[i] == ']') && chars[i + 1] == ' ')
+        return true;
+    const char* captions[] = {"Figure ", "Table "};
+    for (auto* caption : captions) {
+        i = 0;
+        while (caption[i] && i < count && chars[i] == caption[i]) i++;
+        if (caption[i] == 0) return true;
+    }
+    return c == 0x56fe || c == 0x8868; // Chinese figure/table captions.
+}
+
+static bool ReflowLinesJoin(fz_stext_block* block, fz_stext_block* next) {
+    if (block->type != FZ_STEXT_BLOCK_TEXT || next->type != FZ_STEXT_BLOCK_TEXT) return false;
+    auto* tail = block->u.t.last_line;
+    auto* head = next->u.t.first_line;
+    auto* a = ReflowLineStart(tail);
+    auto* b = ReflowLineStart(head);
+    if (!a || !b || tail->wmode || head->wmode || tail->dir.x < .99f || head->dir.x < .99f ||
+        fabsf(tail->dir.y) > .01f || fabsf(head->dir.y) > .01f)
+        return false;
+    if (a->font != b->font || fabsf(a->size - b->size) > .5f || a->argb != b->argb ||
+        ((a->flags | b->flags) & FZ_STEXT_BOLD))
+        return false;
+    if (ReflowItemStart(block->u.t.first_line) || ReflowItemStart(head)) return false;
+
+    // A paragraph has close, regular baselines and a shared left margin.
+    // Use origins, not ink bounds: the manual's spaces have no ink boxes.
+    float size = fminf(a->size, b->size);
+    float leading = b->origin.y - a->origin.y;
+    constexpr float maxLeading = 1.65f;
+    constexpr float marginTolerance = .6f;
+    if (size <= 0 || leading < size * .8f || leading > size * maxLeading ||
+        fabsf(tail->bbox.x0 - head->bbox.x0) > size * marginTolerance)
+        return false;
+    if (tail->prev) {
+        auto* before = ReflowLineStart(tail->prev);
+        if (before && fabsf(leading - (a->origin.y - before->origin.y)) > size * .2f) return false;
+    }
+
+    auto* last = a;
+    for (auto* ch = a; ch; ch = ch->next) {
+        if (ch->c != ' ' && ch->c != '\t') last = ch;
+    }
+    int c = last->c;
+    // Keep short complete statements separate. A full line inside an already
+    // established paragraph may end a sentence without ending the paragraph.
+    if (c == ':' || c == ';' || c == 0xff1a || c == 0xff1b) return false;
+    if ((c == '.' || c == '!' || c == '?' || c == 0x3002 || c == 0xff01 || c == 0xff1f) &&
+        (!tail->prev || block->bbox.x1 - tail->bbox.x1 > size))
+        return false;
+    return true;
+}
+
+static void MergeReflowParagraphs(fz_stext_page* page) {
+    for (auto* block = page->first_block; block && block->next;) {
+        auto* next = block->next;
+        // Author-tagged structures and table cells retain their own boundaries.
+        if (!ReflowLinesJoin(block, next)) {
+            block = next;
+            continue;
+        }
+        block->u.t.last_line->next = next->u.t.first_line;
+        next->u.t.first_line->prev = block->u.t.last_line;
+        block->u.t.last_line = next->u.t.last_line;
+        block->bbox = fz_union_rect(block->bbox, next->bbox);
+        block->next = next->next;
+        if (block->next)
+            block->next->prev = block;
+        else
+            page->last_block = block;
+        // Nodes are pool-owned. Transfer line/font ownership exactly once.
+        next->u = {};
+        next->type = FZ_STEXT_BLOCK_VECTOR;
+        next->prev = next->next = nullptr;
+    }
+}
+
 static void WriteReflowPage(fz_context* ctx, void* state, const void* data, size_t size) {
     auto* buffer = (fz_buffer*)state;
     size_t current = fz_buffer_storage(ctx, buffer, nullptr);
@@ -8892,6 +8987,33 @@ static void WriteReflowPage(fz_context* ctx, void* state, const void* data, size
         fz_throw(ctx, FZ_ERROR_LIMIT, "This page is too large to reflow (32 MiB limit).");
     }
     fz_append_data(ctx, buffer, data, size);
+}
+
+static void WriteReflowBlocks(fz_context* ctx, fz_output* output, fz_stext_page* page, int pageNo) {
+    fz_write_printf(ctx, output, "<div id=\"page%d\">\n", pageNo);
+    for (auto* block = page->first_block; block; block = block->next) {
+        if (block->type != FZ_STEXT_BLOCK_TEXT && block->type != FZ_STEXT_BLOCK_IMAGE &&
+            block->type != FZ_STEXT_BLOCK_STRUCT)
+            continue;
+        fz_rect box = block->bbox;
+        fz_write_printf(ctx, output, "<div data-source-box=\"%g,%g,%g,%g\">\n", box.x0, box.y0, box.x1 - box.x0,
+                        box.y1 - box.y0);
+        fz_stext_page single = *page;
+        single.first_block = single.last_block = block;
+        auto* next = block->next;
+        block->next = nullptr;
+        fz_try(ctx) {
+            fz_print_stext_page_as_xhtml(ctx, output, &single, 0);
+        }
+        fz_always(ctx) {
+            block->next = next;
+        }
+        fz_catch(ctx) {
+            fz_rethrow(ctx);
+        }
+        fz_write_printf(ctx, output, "</div>\n");
+    }
+    fz_write_printf(ctx, output, "</div>\n");
 }
 
 ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
@@ -8940,13 +9062,17 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         if (!PreserveReflowVectors(ctx, page->page, text))
             fz_throw(ctx, FZ_ERROR_LIMIT, "This page contains too many separate drawings to reflow.");
         FixReflowReadingOrder(text);
+        MergeReflowParagraphs(text);
         buffer = fz_new_buffer(ctx, 8192);
         output = fz_new_output(ctx, 8192, buffer, WriteReflowPage, nullptr, nullptr);
-        fz_print_stext_page_as_xhtml(ctx, output, text, pageNo);
+        WriteReflowBlocks(ctx, output, text, pageNo);
         fz_close_output(ctx, output);
         unsigned char* bytes = nullptr;
         size_t count = fz_buffer_storage(ctx, buffer, &bytes);
-        result.html = str::Dup(Str((char*)bytes, (int)count));
+        // Each isolated block uses a temporary page wrapper; keep just one
+        // page id while retaining block geometry for view-center navigation.
+        result.html =
+            str::Dup(str::ReplaceTemp(Str((char*)bytes, (int)count), StrL("<div id=\"page0\">"), StrL("<div>")));
     }
     fz_always(ctx) {
         fz_drop_output(ctx, output);

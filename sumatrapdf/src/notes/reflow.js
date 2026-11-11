@@ -11,6 +11,7 @@ let info,
   current = 1,
   epoch = 0,
   checking = false,
+  navigating = false,
   selectedNote,
   clickTimer;
 const pages = new Map(),
@@ -132,6 +133,91 @@ function restore(saved) {
   else if (saved.element?.isConnected) scrollBy(0, saved.element.getBoundingClientRect().top - saved.top);
   else scrollBy(0, saved.section.getBoundingClientRect().top - saved.sectionTop);
 }
+function sourceBoxes(page) {
+  return [...page.content.querySelectorAll("[data-source-box]")].map((element) => ({
+    element,
+    box: element.dataset.sourceBox.split(",").map(Number),
+  }));
+}
+const centerY = () => ($("nav").getBoundingClientRect().bottom + innerHeight) / 2;
+function centerSource() {
+  const x = innerWidth / 2,
+    y = centerY();
+  const page =
+    orderedPages().find(({ section }) => {
+      const rect = section.getBoundingClientRect();
+      return rect.top <= y && rect.bottom > y;
+    }) || pages.get(current);
+  if (!page) return;
+  const result = { page: page.page, glyph: -1, x: 0, y: 0 };
+  let nearest,
+    distance = Infinity;
+  for (const item of sourceBoxes(page)) {
+    const rect = item.element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const dx = Math.max(rect.left - x, x - rect.right, 0);
+    const dy = Math.max(rect.top - y, y - rect.bottom, 0);
+    if (dx * dx + dy * dy >= distance) continue;
+    distance = dx * dx + dy * dy;
+    nearest = item;
+  }
+  if (nearest) {
+    const { box, element } = nearest,
+      rect = element.getBoundingClientRect();
+    result.x = box[0] + box[2] * Math.max(0, Math.min(1, (x - rect.left) / rect.width));
+    result.y = box[1] + box[3] * Math.max(0, Math.min(1, (y - rect.top) / rect.height));
+  }
+  const caret = document.caretRangeFromPoint(x, y),
+    node = caret?.startContainer;
+  if (node?.nodeType !== Node.TEXT_NODE || !page.content.contains(node)) return result;
+  let offset = Math.min(caret.startOffset, node.length - 1);
+  if (offset < 0) return result;
+  if (node.data.charCodeAt(offset) >= 0xdc00 && node.data.charCodeAt(offset) <= 0xdfff) offset--;
+  const range = document.createRange();
+  range.setStart(node, offset);
+  range.setEnd(node, offset + (node.data.codePointAt(offset) > 0xffff ? 2 : 1));
+  const rect = range.getBoundingClientRect();
+  if (
+    !range.toString().trim() ||
+    rect.height <= 0 ||
+    Math.max(rect.top - y, y - rect.bottom, rect.left - x, x - rect.right) > rect.height
+  )
+    return result;
+  try {
+    result.glyph = page.model.selection(range)[0]?.start ?? -1;
+  } catch {}
+  return result;
+}
+function restoreCenter(target) {
+  const page = pages.get(target?.page);
+  if (!page) return;
+  const range = target.glyph >= 0 && page.model.domRanges(target.glyph, target.glyph + 1)[0];
+  if (range) {
+    const rect = range.getBoundingClientRect();
+    scrollBy(0, rect.top + rect.height / 2 - centerY());
+    return;
+  }
+  let nearest,
+    distance = Infinity;
+  for (const item of sourceBoxes(page)) {
+    const [x, y, width, height] = item.box;
+    const dx = Math.max(x - target.x, target.x - x - width, 0);
+    const dy = Math.max(y - target.y, target.y - y - height, 0);
+    const d = dx * dx + dy * dy;
+    if (d > distance || (d === distance && nearest && nearest.box[2] * nearest.box[3] <= width * height)) continue;
+    nearest = item;
+    distance = d;
+  }
+  if (nearest) {
+    const rect = nearest.element.getBoundingClientRect(),
+      box = nearest.box;
+    const fraction = Math.max(0, Math.min(1, (target.y - box[1]) / box[3]));
+    scrollBy(0, rect.top + rect.height * fraction - centerY());
+  }
+}
+function closeOriginal() {
+  return call("close", centerSource() || {}).catch(error);
+}
 async function load(page, token = epoch) {
   if (page < 1 || page > info.pageCount || token !== epoch) return;
   if (pages.has(page)) return pages.get(page);
@@ -196,23 +282,36 @@ function clear() {
   hideActions();
   globalThis.CSS?.highlights?.delete("ai-notes");
 }
-async function navigate(page) {
+async function navigate(page, target) {
   if (!info || page < 1 || page > info.pageCount) return;
   clear();
   const token = epoch;
-  current = page;
-  label();
-  $("#status").textContent = say("正在重排当前页…", "Reflowing this page…");
-  const entry = await load(page, token);
-  if (!entry || token !== epoch) return;
-  await call("position", { page });
-  if (token !== epoch) return;
-  $("#status").textContent = "";
-  scrollTo(0, 0);
-  // A bounded window only: opening a 2,000-page PDF never extracts the whole book.
-  await Promise.all([load(page - 1, token), load(page + 1, token)]);
-  if (token === epoch) entry.section.scrollIntoView({ block: "start" });
-  positions();
+  navigating = true;
+  $("#pages").setAttribute("aria-busy", "true");
+  try {
+    current = page;
+    label();
+    $("#status").textContent = say("正在重排当前页…", "Reflowing this page…");
+    const entry = await load(page, token);
+    if (!entry || token !== epoch) return;
+    await call("position", { page });
+    if (token !== epoch) return;
+    $("#status").textContent = "";
+    scrollTo(0, 0);
+    // A bounded window only: opening a 2,000-page PDF never extracts the whole book.
+    await Promise.all([load(page - 1, token), load(page + 1, token)]);
+    if (token !== epoch) return;
+    await Promise.all([...entry.content.querySelectorAll("img")].map((img) => img.decode().catch(() => {})));
+    if (token !== epoch) return;
+    entry.section.scrollIntoView({ block: "start" });
+    if (target) restoreCenter(target);
+    positions();
+  } finally {
+    if (token === epoch) {
+      navigating = false;
+      $("#pages").setAttribute("aria-busy", "false");
+    }
+  }
 }
 function prune() {
   const saved = anchor();
@@ -224,11 +323,11 @@ function prune() {
   restore(saved);
 }
 async function checkScroll() {
-  if (checking || !pages.size) return;
+  if (checking || navigating || !pages.size) return;
   checking = true;
   try {
     const ordered = orderedPages(),
-      top = $("nav").offsetHeight + 12;
+      top = centerY();
     const at = ordered.find((p) => p.section.getBoundingClientRect().bottom > top);
     if (at && at.page !== current) {
       current = at.page;
@@ -293,7 +392,7 @@ $("#annotate").addEventListener("click", () => {
 });
 $("#previous").addEventListener("click", () => navigate(current - 1).catch(error));
 $("#next").addEventListener("click", () => navigate(current + 1).catch(error));
-$("#original").addEventListener("click", () => call("close").catch(error));
+$("#original").addEventListener("click", closeOriginal);
 function allNoteRanges() {
   return notes.flatMap(
     (note) =>
@@ -471,7 +570,8 @@ addEventListener("reflowstate", (e) => {
   drawNotes();
 });
 addEventListener("reflowzoom", (e) => setZoom(e.detail.zoom, false));
-addEventListener("reflownavigate", (e) => navigate(e.detail.page).catch(error));
+addEventListener("reflownavigate", (e) => navigate(e.detail.page, e.detail.center).catch(error));
+addEventListener("reflowcapture", closeOriginal);
 addEventListener("reflowfocus", async (e) => {
   try {
     const note = notes.find((n) => n.id === e.detail.id);
@@ -492,7 +592,7 @@ try {
   clickEnabled = info.notes?.click !== false;
   zoom = info.zoom || 100;
   setZoom(zoom, false);
-  await navigate(info.page || 1);
+  await navigate(info.page || 1, info.center);
 } catch (e) {
   error(e);
 }

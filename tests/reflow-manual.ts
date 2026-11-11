@@ -217,6 +217,102 @@ try {
       { number, sourceText: page.sourceText, displayText: page.displayText },
     );
     result.ui = ui;
+    if (number === 334 && args.includes("--paragraphs")) {
+      const expected =
+        "The RISC-V system includes RISC IP core and related peripheral devices (CPUs_E902_CFG, TIMERSTAMP, TIMER_GRAYDEC, TIMER_GRAYENC, and so on), which is able to be interconnected to CPUX system by STBY AHB Matrix.";
+      result.paragraphs = await flow.evaluate(
+        async ({ sourceText, displayText }: any) => {
+          const content = document.querySelector(
+            '.source-page[data-page="334"] .page-content',
+          )!;
+          const paragraphs = [...content.querySelectorAll("p")];
+          const intro = paragraphs.find((p) =>
+            p.textContent?.startsWith("The RISC-V system includes"),
+          )!;
+          const { SourcePage } = await import(
+            new URL("reflow-model.js", location.href).href
+          );
+          const model = new SourcePage(content, 334, sourceText, displayText);
+          const range = document.createRange();
+          range.selectNodeContents(intro);
+          return {
+            intro: intro.textContent!.replace(/\s+/g, " ").trim(),
+            features: paragraphs.some(
+              (p) =>
+                p.textContent?.trim() ===
+                "The RISC-V system has the following features:",
+            ),
+            items: paragraphs.filter((p) =>
+              /Separate TIMERSTAMP|Supports the access/.test(
+                p.textContent || "",
+              ),
+            ).length,
+            ranges: model.selection(range),
+          };
+        },
+        { sourceText: page.sourceText, displayText: page.displayText },
+      );
+      assert.equal(
+        result.paragraphs.intro,
+        expected,
+        "physical PDF line breaks must become one logical paragraph",
+      );
+      assert.ok(
+        result.paragraphs.features,
+        "the following real paragraph must remain separate",
+      );
+      assert.equal(
+        result.paragraphs.items,
+        2,
+        "independent list items must remain separate",
+      );
+      assert.equal(result.paragraphs.ranges.length, 1);
+      const anchor = result.paragraphs.ranges[0];
+      assert.equal(
+        display
+          .slice(anchor.start, anchor.end)
+          .join("")
+          .replace(/\s+/g, " ")
+          .trim(),
+        expected,
+        "a merged paragraph must retain exact source anchors across original line breaks",
+      );
+      result.paragraphZoom = [];
+      for (const zoom of [100, 200]) {
+        sendCommandSync(app.frame, cmdId(`CmdZoom${zoom}`));
+        await flow.waitForFunction(
+          (zoom: number) =>
+            document
+              .querySelector("#page-label")
+              ?.textContent?.includes(`${zoom}%`),
+          zoom,
+        );
+        await settle();
+        const metrics = await flow.evaluate(() => {
+          const intro = [
+            ...document.querySelectorAll('.source-page[data-page="334"] p'),
+          ].find((p) =>
+            p.textContent?.startsWith("The RISC-V system includes"),
+          )!;
+          const rect = intro.getBoundingClientRect();
+          return {
+            text: intro.textContent!.replace(/\s+/g, " ").trim(),
+            hardBreaks: intro.querySelectorAll("br").length,
+            lines: rect.height / parseFloat(getComputedStyle(intro).lineHeight),
+            width: rect.width,
+            available: intro.closest(".page-content")!.clientWidth,
+          };
+        });
+        assert.equal(metrics.text, expected);
+        assert.equal(metrics.hardBreaks, 0);
+        assert.ok(metrics.width <= metrics.available + 1);
+        result.paragraphZoom.push({ zoom, ...metrics });
+      }
+      assert.ok(
+        result.paragraphZoom[1].lines > result.paragraphZoom[0].lines,
+        "enlarging a logical paragraph must wrap it into more lines within the reading width",
+      );
+    }
     if (number === 334 && args.includes("--reading-order")) {
       result.readingOrder = await flow.evaluate(() => {
         const content = document.querySelector(

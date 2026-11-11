@@ -73,21 +73,22 @@ function grid(
 export function makeReflowFixture(variant = "primary"): Buffer {
   const first =
     text(`Reflow ${variant} document`, 54, 750, 24) +
+    text("The cooperation between components determines", 54, 710, 10.5) +
     text(
-      "The cooperation between components determines reliable behavior.",
+      "reliable behavior. A narrow reading pane should wrap this paragraph",
       54,
-      710,
+      694,
+      10.5,
     ) +
-    text(
-      "A narrow reading pane should wrap this paragraph into additional lines.",
-      54,
-      688,
-    ) +
+    text("into additional lines.", 54, 678, 10.5) +
     text(
       "Pictures and register tables remain entirely inside the reading width.",
       54,
-      666,
+      656,
+      10.5,
     ) +
+    text("- FeatureFirst has no terminal punctuation", 54, 638, 10.5) +
+    text("- FeatureSecond remains an independent item", 54, 622, 10.5) +
     grid(
       3,
       [

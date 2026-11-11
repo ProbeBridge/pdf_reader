@@ -16,6 +16,7 @@
 #include "DocController.h"
 #include "EngineBase.h"
 #include "DisplayModel.h"
+#include "TextSelection.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
 #include "AIChatTypes.h"
@@ -29,6 +30,13 @@
 struct ReflowCache;
 static void DropReflowCache(ReflowCache* cache);
 
+struct ReflowCenter {
+    int page = 1;
+    int glyph = -1;
+    double x = 0;
+    double y = 0;
+};
+
 struct ReflowView : WebviewWnd {
     MainWindow* win = nullptr;
     HWND frame = nullptr;
@@ -37,11 +45,13 @@ struct ReflowView : WebviewWnd {
     u64 epoch = 0;
     bool enabled = false;
     bool ready = false;
+    bool closing = false;
     int page = 1;
     int zoom = 100;
     int pendingPages = 0;
     Str documentPath;
     ReflowCache* cache = nullptr;
+    ReflowCenter center;
 
     ~ReflowView() override {
         DropReflowCache(cache);
@@ -69,6 +79,70 @@ static TempStr ReflowField(Str data, Str key) {
     for (json::Value& value : reader)
         if (json::PathMatch(value.path, segment)) return str::DupTemp(value.value);
     return {};
+}
+
+static TempStr CenterJson(const ReflowCenter& center) {
+    return fmt("{\"page\":%d,\"glyph\":%d,\"x\":%g,\"y\":%g}", center.page, center.glyph, center.x, center.y);
+}
+
+static ReflowCenter OriginalCenter(MainWindow* win) {
+    ReflowCenter result;
+    auto* dm = win->AsFixed();
+    Size size = dm->GetViewPort().Size();
+    Point screen(size.dx / 2, size.dy / 2);
+    result.page = dm->GetPageNoByPoint(screen);
+    if (!dm->ValidPageNo(result.page)) result.page = dm->GetPageNextToPoint(screen);
+    if (!dm->ValidPageNo(result.page)) result.page = dm->CurrentPageNo();
+    PointF point = dm->CvtFromScreen(screen, result.page);
+    result.x = point.x;
+    result.y = point.y;
+    auto* engine = dm->GetEngine();
+    TextSelection selection(engine);
+    int glyph = selection.FindClosestGlyphAt(result.page, point.x, point.y);
+    int count = 0;
+    Rect* coords = nullptr;
+    engine->GetTextForPage(result.page, &count, &coords);
+    if (glyph >= 0 && glyph < count && !coords[glyph].IsEmpty()) {
+        Rect box = dm->CvtToScreen(result.page, ToRectF(coords[glyph]));
+        int dx = std::max({box.x - screen.x, screen.x - box.Right(), 0});
+        int dy = std::max({box.y - screen.y, screen.y - box.Bottom(), 0});
+        if (dx <= box.dy && dy <= box.dy) result.glyph = glyph;
+    }
+    return result;
+}
+
+static void ShowOriginalCenter(ReflowView* view, Str data) {
+    auto* win = view->win;
+    auto* dm = win->AsFixed();
+    ReflowCenter center = view->center;
+    int page = atoi(CStrTemp(ReflowField(data, StrL("page"))));
+    if (dm->ValidPageNo(page)) {
+        center.page = page;
+        center.glyph = atoi(CStrTemp(ReflowField(data, StrL("glyph"))));
+        center.x = atof(CStrTemp(ReflowField(data, StrL("x"))));
+        center.y = atof(CStrTemp(ReflowField(data, StrL("y"))));
+    }
+    view->enabled = view->closing = false;
+    view->SetIsVisible(false);
+    dm->cb->UpdateScrollbars(dm, dm->GetCanvasSize());
+    if (dm->ValidPageNo(center.page) && center.x >= -1e6 && center.x <= 1e6 && center.y >= -1e6 && center.y <= 1e6) {
+        int count = 0;
+        Rect* coords = nullptr;
+        dm->GetEngine()->GetTextForPage(center.page, &count, &coords);
+        if (center.glyph >= 0 && center.glyph < count && !coords[center.glyph].IsEmpty()) {
+            Rect box = coords[center.glyph];
+            center.x = box.x + box.dx * .5;
+            center.y = box.y + box.dy * .5;
+        }
+        dm->GoToPage(center.page, false);
+        Size size = dm->GetViewPort().Size();
+        Point screen = dm->CvtToScreen(center.page, PointF((float)center.x, (float)center.y));
+        dm->ScrollXBy(screen.x - size.dx / 2);
+        dm->ScrollYBy(screen.y - size.dy / 2, false);
+    }
+    ToolbarUpdateStateForWindow(win, false);
+    ScheduleUiUpdate(win, kUiForceRelayout | kUiToolbarDirty);
+    ScheduleRepaint(win, 0);
 }
 
 struct ReflowCacheEntry {
@@ -327,8 +401,8 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
     int error = 0;
     if (str::Eq(action, StrL("ready"))) {
         view->ready = true;
-        result = fmt("{\"page\":%d,\"pageCount\":%d,\"zoom\":%d,\"notes\":%s}", view->page, view->engine->PageCount(),
-                     view->zoom, ContextNotesReflowState(win));
+        result = fmt("{\"page\":%d,\"pageCount\":%d,\"zoom\":%d,\"notes\":%s,\"center\":%s}", view->page,
+                     view->engine->PageCount(), view->zoom, ContextNotesReflowState(win), CenterJson(view->center));
     } else if (str::Eq(action, StrL("cache-info"))) {
         auto* cache = view->cache;
         if (cache) {
@@ -397,7 +471,9 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         else
             CopyTextToClipboard(ReflowField(data, StrL("text")));
     } else if (str::Eq(action, StrL("close"))) {
-        ReflowDocumentHandleCommand(win, CmdToggleDocumentReflow);
+        ShowOriginalCenter(view, data);
+    } else if (str::Eq(action, StrL("original-center"))) {
+        result = CenterJson(OriginalCenter(win));
     } else {
         error = 1;
         result = ReflowQuote(StrL("Unsupported reflow action."));
@@ -476,12 +552,16 @@ bool ReflowDocumentHandleCommand(MainWindow* win, int cmdId) {
     if (cmdId == CmdToggleDocumentReflow) {
         auto* view = FindReflow(win);
         if (ReflowDocumentVisible(win)) {
-            view->enabled = false;
-            view->SetIsVisible(false);
-            auto* dm = win->AsFixed();
-            if (dm) dm->cb->UpdateScrollbars(dm, dm->GetCanvasSize());
+            if (view->closing) return true;
+            if (view->ready) {
+                view->closing = true;
+                ReflowEvent(view, StrL("reflowcapture"), StrL("{}"));
+            } else
+                ShowOriginalCenter(view, {});
+            return true;
         } else {
             if (!ReflowDocumentAvailable(win)) return true;
+            ReflowCenter center = OriginalCenter(win);
             if (view &&
                 (!view->ready || view->tab != win->CurrentTab() || view->engine != win->AsFixed()->GetEngine())) {
                 ReflowDocumentDestroy(win);
@@ -490,13 +570,16 @@ bool ReflowDocumentHandleCommand(MainWindow* win, int cmdId) {
             if (!view) view = CreateReflow(win);
             if (!view) return true;
             view->enabled = true;
+            view->center = center;
             auto* dm = win->AsFixed();
             if (dm) dm->cb->UpdateScrollbars(dm, dm->GetCanvasSize());
             ReflowDocumentLayout(win);
+            view->page = center.page;
             ReflowDocumentUpdateNotes(win);
             // A toggle may have hidden the view while page extraction was in
             // flight. Restart its bounded page window when shown again.
-            ReflowEvent(view, StrL("reflownavigate"), fmt("{\"page\":%d}", view->page));
+            ReflowEvent(view, StrL("reflownavigate"),
+                        fmt("{\"page\":%d,\"center\":%s}", view->page, CenterJson(center)));
             view->Focus();
         }
         ToolbarUpdateStateForWindow(win, false);

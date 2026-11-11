@@ -283,7 +283,8 @@ async function waitPage(flow: any, page: number, caller = "") {
         ?.textContent?.startsWith(`${page} /`) &&
       !!document.querySelector(
         `.source-page[data-page="${page}"] .page-content`,
-      ),
+      ) &&
+      document.querySelector("#pages")?.getAttribute("aria-busy") !== "true",
     page,
   );
   await poll(
@@ -523,6 +524,27 @@ try {
     "Description",
   ]);
   assert.match(exported.sourceText, /cooperation/);
+  const paragraphs = await flow
+    .locator('.source-page[data-page="1"] p')
+    .allTextContents();
+  assert.ok(
+    paragraphs.includes(
+      "The cooperation between components determines reliable behavior. A narrow reading pane should wrap this paragraph into additional lines.",
+    ),
+    "physical PDF lines must become one paragraph, including a sentence boundary inside a line",
+  );
+  assert.ok(
+    paragraphs.includes(
+      "Pictures and register tables remain entirely inside the reading width.",
+    ),
+    "the larger paragraph gap must retain a separate paragraph",
+  );
+  report.paragraphs = paragraphs;
+  assert.ok(paragraphs.includes("- FeatureFirst has no terminal punctuation"));
+  assert.ok(
+    paragraphs.includes("- FeatureSecond remains an independent item"),
+    "closely spaced list items without terminal punctuation must stay separate",
+  );
   report.milestones.push("actual MuPDF XHTML table/image");
   const initial = await geometry(flow, "initial");
   sendCommandSync(app.frame, cmdId("CmdZoom400"));
@@ -568,6 +590,132 @@ try {
   await captureWindowToPng(
     app.frame,
     join(output, "native-reflow-register.png"),
+  );
+  mark("preserve the center glyph across original/reflow toggles");
+  sendCommandSync(app.frame, cmdId("CmdZoom100"));
+  await flow.waitForFunction(() =>
+    document.querySelector("#page-label")?.textContent?.includes("100%"),
+  );
+  const centerGlyph = await flow.evaluate(async (data: any) => {
+    const content = document.querySelector(
+      '.source-page[data-page="2"] .page-content',
+    )!;
+    const walk = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+    for (let node; (node = walk.nextNode());) {
+      const index = node.textContent!.indexOf("The original page number");
+      if (index < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + 1);
+      const rect = range.getBoundingClientRect();
+      scrollBy(
+        0,
+        rect.top +
+          rect.height / 2 -
+          (document.querySelector("nav")!.getBoundingClientRect().bottom +
+            innerHeight) /
+            2,
+      );
+      break;
+    }
+    const range = document.caretRangeFromPoint(
+      innerWidth / 2,
+      (document.querySelector("nav")!.getBoundingClientRect().bottom +
+        innerHeight) /
+        2,
+    )!;
+    while (
+      /\s/.test(range.startContainer.textContent![range.startOffset] || "") &&
+      range.startOffset + 1 < range.startContainer.textContent!.length
+    )
+      range.setStart(range.startContainer, range.startOffset + 1);
+    range.setEnd(range.startContainer, range.startOffset + 1);
+    const { SourcePage } = await import(
+      new URL("reflow-model.js", location.href).href
+    );
+    const model = new SourcePage(content, 2, data.sourceText, data.displayText);
+    return {
+      ranges: model.selection(range),
+      top: range.getBoundingClientRect().top,
+    };
+  }, register);
+  assert.equal(centerGlyph.ranges.length, 1);
+  sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
+  await poll(
+    async () => scrollbarSnapshot("centerOriginal").nativeV,
+    Boolean,
+    "original view after toggle",
+  );
+  sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
+  await waitPage(flow, 2, "center glyph toggle");
+  const centerAfter = await flow.evaluate(
+    async ({ data, glyph }: any) => {
+      const content = document.querySelector(
+        '.source-page[data-page="2"] .page-content',
+      )!;
+      const { SourcePage } = await import(
+        new URL("reflow-model.js", location.href).href
+      );
+      const model = new SourcePage(
+        content,
+        2,
+        data.sourceText,
+        data.displayText,
+      );
+      return model.domRanges(glyph.start, glyph.end)[0].getBoundingClientRect()
+        .top;
+    },
+    { data: register, glyph: centerGlyph.ranges[0] },
+  );
+  report.centerToggle = {
+    before: centerGlyph.top,
+    after: centerAfter,
+    ranges: centerGlyph.ranges,
+  };
+  assert.ok(
+    Math.abs(centerAfter - centerGlyph.top) < 40,
+    `switching original/reflow must retain the viewport's center content: ${JSON.stringify(report.centerToggle)}`,
+  );
+  report.originalCenter = await nativeCall(flow, "original-center");
+  const imageBefore = await flow
+    .locator('.source-page[data-page="2"] img')
+    .first()
+    .evaluate((image: HTMLImageElement) => {
+      const rect = image.getBoundingClientRect();
+      scrollBy(
+        0,
+        rect.top +
+          rect.height / 2 -
+          (document.querySelector("nav")!.getBoundingClientRect().bottom +
+            innerHeight) /
+            2,
+      );
+      const centered = image.getBoundingClientRect();
+      return centered.top + centered.height / 2;
+    });
+  sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
+  await poll(
+    async () => scrollbarSnapshot("imageOriginal").nativeV,
+    Boolean,
+    "original image view",
+  );
+  sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
+  await waitPage(flow, 2, "center image toggle");
+  const imageAfter = await flow
+    .locator('.source-page[data-page="2"] img')
+    .first()
+    .evaluate((image: HTMLImageElement) => {
+      const rect = image.getBoundingClientRect();
+      return rect.top + rect.height / 2;
+    });
+  report.centerImage = { before: imageBefore, after: imageAfter };
+  assert.ok(
+    Math.abs(imageBefore - imageAfter) < 16,
+    `switching original/reflow must retain the center of an image: ${JSON.stringify(report.centerImage)}`,
+  );
+  sendCommandSync(app.frame, cmdId("CmdZoom400"));
+  await flow.waitForFunction(() =>
+    document.querySelector("#page-label")?.textContent?.includes("400%"),
   );
   moveWindow(app.frame, 60, 50, 800, 800);
   await app.client.waitForRenderIdle();
@@ -667,6 +815,16 @@ try {
   await waitPage(flow, 2, "reflow next button");
   sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
   await app.client.waitForRenderIdle();
+  await poll(
+    async () =>
+      scrollMode === "windows"
+        ? scrollbarSnapshot("restoringOriginal").nativeV
+        : scrollbarSnapshot("restoringOriginal").overlays.some(
+            (bar) => bar.visible,
+          ),
+    Boolean,
+    "restore original scrollbars",
+  );
   await checkReflowSwitch(false);
   const restoredBars = scrollbarSnapshot("originalAfterReflow");
   mark(`checking immediate original ${scrollMode} scrollbar restoration`);
