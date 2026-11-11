@@ -1,0 +1,237 @@
+// Test for https://github.com/sumatrapdfreader/sumatrapdf/issues/5963
+//
+// Sign Document used to always draw labels ("Digitally signed by"), the
+// distinguished name, the date, and a large name graphic. The dialog now has
+// appearance checkboxes and an optional PNG/JPEG. This checks the dialog
+// offers those controls, and (when the machine can make a test cert) that
+// signing with an image and without labels embeds an image XObject.
+//
+// Run:  bun tests/issue-5963.ts [--no-build]   (or via tests/run-almost-all.ts)
+
+import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { ControlCommand } from "./control.ts";
+import { IS_MAC } from "./host.ts";
+import { cmdId, runStandalone, tmpPath, USE_NG, removeTestCert, runPowerShell } from "./util.ts";
+import { closeToolWindow, killAndWait, launchControlled, sendCommand, waitToolWindow } from "./win-automation.ts";
+import {
+  enumChildWindows,
+  getClassName,
+  getControlText,
+  getWindowPid,
+  postMessage,
+  sendMessage,
+  sleep,
+  WM_CLOSE,
+} from "./winapi.ts";
+
+const kCertSubject = "CN=SumatraPDF AppearSignTest";
+const BM_GETCHECK = 0x00f0;
+const BST_CHECKED = 1;
+// dn | date | text name — no labels, no graphic name
+const kNoLabelsFlags = 2 | 4 | 8;
+
+function makeTestCert(): string | null {
+  const created = runPowerShell(`
+    $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+      '${kCertSubject}', $rsa,
+      [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+      [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $cert = $req.CreateSelfSigned([datetime]::UtcNow.AddDays(-1), [datetime]::UtcNow.AddYears(1))
+    $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor
+             [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+    $stored = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+      $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, 'x'), 'x', $flags)
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My','CurrentUser')
+    $store.Open('ReadWrite')
+    $store.Add($stored)
+    $store.Close()
+    Write-Output $stored.Thumbprint
+  `);
+  const thumb = created.out.trim().split(/\s+/).pop() ?? "";
+  if (!created.ok || !/^[0-9A-F]{40}$/i.test(thumb)) {
+    console.log(`\nSKIP issue-5963 sign: could not create a test certificate:\n${created.out}`);
+    return null;
+  }
+  return thumb.toUpperCase();
+}
+
+function writePlainPdf(path: string): void {
+  const objs: string[] = [];
+  objs[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objs[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+  objs[3] =
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> " +
+    "/Contents 4 0 R >>";
+  const content = "BT /F1 12 Tf 20 160 Td (sign here) Tj ET";
+  objs[4] = `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+  objs[5] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+
+  let pdf = "%PDF-1.7\n";
+  const offsets: number[] = [];
+  for (let i = 1; i < objs.length; i++) {
+    offsets[i] = pdf.length;
+    pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`;
+  }
+  const xrefAt = pdf.length;
+  pdf += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let i = 1; i < objs.length; i++) {
+    pdf += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
+  }
+  pdf += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`;
+  writeFileSync(path, pdf, "latin1");
+}
+
+// 1x1 red PNG so the signed file has an obvious image XObject
+function writeTinyPng(path: string): void {
+  const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  writeFileSync(path, Buffer.from(b64, "base64"));
+}
+
+function stripAmp(s: string): string {
+  return s.replace(/&/g, "");
+}
+
+function checkboxTexts(dlg: number): Map<string, number> {
+  const map = new Map<string, number>();
+  enumChildWindows(dlg, (h) => {
+    if (getClassName(h) === "Button") {
+      const t = stripAmp(getControlText(h));
+      if (t) {
+        map.set(t, h);
+      }
+    }
+    return true;
+  });
+  return map;
+}
+
+function isChecked(hwnd: number): boolean {
+  return Number(sendMessage(hwnd, BM_GETCHECK, 0, 0)) === BST_CHECKED;
+}
+
+export async function testit(): Promise<void> {
+  const pdf = tmpPath("issue-5963.pdf");
+  writePlainPdf(pdf);
+
+  const { proc, client, frame } = await launchControlled([pdf]);
+  try {
+    await client.waitForRenderIdle();
+    sendCommand(frame, cmdId("CmdSignDocument"));
+    // macOS has no HWND for the dialog. The checks below read it over control.
+    let dlg = 0;
+    if (!IS_MAC) {
+      const pid = getWindowPid(frame);
+      dlg = await waitToolWindow(client, pid, "signdocument", { title: "Sign Document", timeoutMs: 8000 });
+      if (!dlg) {
+        throw new Error("timed out waiting for Sign Document dialog");
+      }
+    }
+
+    const want = [
+      [/labels/i, "Show labels"],
+      [/^show name$/i, "Show name"],
+      [/dn/i, "Show DN"],
+      [/date/i, "Show date"],
+      [/graphic/i, "Show name as graphic"],
+    ] as const;
+    if (USE_NG) {
+      let raw = "";
+      for (const deadline = Date.now() + 3000; Date.now() < deadline;) {
+        const res = await client.request(ControlCommand.TestToolWindow, ["sign-checks"]);
+        raw = String(res[1] ?? "");
+        if (/labels/i.test(raw)) {
+          break;
+        }
+        await sleep(100);
+      }
+      const checks = new Map<string, boolean>();
+      for (const line of raw.split("\n")) {
+        const m = /^(.*)=([01])$/.exec(line.trim());
+        if (m) {
+          checks.set(m[1], m[2] === "1");
+        }
+      }
+      for (const [re, label] of want) {
+        const hit = [...checks.entries()].find(([t]) => re.test(t));
+        if (!hit) {
+          throw new Error(`issue-5963: missing '${label}' checkbox; have: ${[...checks.keys()].join(", ")}`);
+        }
+        if (!hit[1]) {
+          throw new Error(`issue-5963: '${label}' should be checked by default`);
+        }
+      }
+    } else {
+      let boxes = new Map<string, number>();
+      for (const deadline = Date.now() + 3000; Date.now() < deadline;) {
+        boxes = checkboxTexts(dlg);
+        if ([...boxes.keys()].some((t) => /labels/i.test(t))) {
+          break;
+        }
+        await sleep(100);
+      }
+      for (const [re, label] of want) {
+        const hwnd = [...boxes.entries()].find(([t]) => re.test(t))?.[1];
+        if (!hwnd) {
+          throw new Error(`issue-5963: missing '${label}' checkbox; have: ${[...boxes.keys()].join(", ")}`);
+        }
+        if (!isChecked(hwnd)) {
+          throw new Error(`issue-5963: '${label}' should be checked by default`);
+        }
+      }
+    }
+    console.log("  Sign Document offers appearance checkboxes, all on by default ✓");
+    await closeToolWindow(client, "signdocument", dlg);
+    await sleep(200);
+
+    if (IS_MAC) {
+      console.log("SKIP issue-5963 sign: the test certificate is created in the Windows certificate store");
+      return;
+    }
+
+    const thumb = makeTestCert();
+    if (!thumb) {
+      return;
+    }
+
+    const png = tmpPath("issue-5963.png");
+    const signed = tmpPath("issue-5963-signed.pdf");
+    writeTinyPng(png);
+    rmSync(signed, { force: true });
+    try {
+      const signedRes = await client.request(ControlCommand.TestSignDocument, [
+        pdf,
+        signed,
+        thumb,
+        "",
+        "",
+        png,
+        kNoLabelsFlags,
+      ]);
+      const signRaw = String(signedRes[1] ?? "");
+      if (signedRes[0] !== 0) {
+        throw new Error(`issue-5963 sign: ${signRaw.trim()}`);
+      }
+      if (!existsSync(signed)) {
+        throw new Error("issue-5963: signed file was not written");
+      }
+      const bytes = new TextDecoder("latin1").decode(await Bun.file(signed).arrayBuffer());
+      if (!/\/Subtype\s*\/Image/.test(bytes)) {
+        throw new Error("issue-5963: signed file has no image XObject");
+      }
+      console.log("  signed with an image and without labels; PDF embeds the image ✓");
+    } finally {
+      removeTestCert(thumb);
+      rmSync(signed, { force: true });
+      rmSync(png, { force: true });
+    }
+  } finally {
+    client.close();
+    postMessage(frame, WM_CLOSE, 0, 0);
+    await killAndWait(proc);
+  }
+}
+
+if (import.meta.main) {
+  await runStandalone(testit);
+}

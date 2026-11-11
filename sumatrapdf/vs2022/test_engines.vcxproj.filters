@@ -1,0 +1,134 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="base">
+      <UniqueIdentifier>{8078947C-6CAF-950D-159C-7B1001B2110F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shared">
+      <UniqueIdentifier>{9C5CB11B-88FE-DBF1-71B9-EF455DFA6242}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shared\gui">
+      <UniqueIdentifier>{10D62118-FC8D-6365-6595-3CC1516CFE55}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="shared\tools">
+      <UniqueIdentifier>{3CB6D7A8-2819-674D-D19E-9F03BDE032D0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="tools">
+      <UniqueIdentifier>{36DF7010-A2F3-98C1-6B75-3C21D74895F2}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\shared\CachedObjects.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\ChapterTable.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\DocProperties.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\EngineAll.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\EngineBase.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\LitDoc.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\PdfCad.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\PdfDarkMode.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\RtfDoc.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\TextSearch.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\TextSelection.h">
+      <Filter>shared</Filter>
+    </ClInclude>
+    <ClInclude Include="..\src\shared\gui\UIModels.h">
+      <Filter>shared\gui</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="..\src\CachedObjects.cpp" />
+    <ClCompile Include="..\src\EngineImages.cpp" />
+    <ClCompile Include="..\src\GumboHelpers.cpp" />
+    <ClCompile Include="..\src\ImageReader.cpp" />
+    <ClCompile Include="..\src\PdfDarkModeNoOp.cpp" />
+    <ClCompile Include="..\src\base\GuessFileType.cpp">
+      <Filter>base</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\AvifReader.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\ChapterTable.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\DocProperties.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\EbookDoc.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\EmbeddedResources.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\EngineBase.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\EngineDjvuDec.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\EngineMupdf.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\GumboHtmlParser.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\JxlReader.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\LitDoc.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\MobiDoc.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\PalmDbReader.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\PdfCad.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\RtfDoc.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\TextSearch.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\TextSelection.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\WebpReader.cpp">
+      <Filter>shared</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\gui\UIModels.cpp">
+      <Filter>shared\gui</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\tools\TestEnginesCommon.cpp">
+      <Filter>shared\tools</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\tools\ToolLog.cpp">
+      <Filter>shared\tools</Filter>
+    </ClCompile>
+    <ClCompile Include="..\src\tools\test_engines.cpp">
+      <Filter>tools</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

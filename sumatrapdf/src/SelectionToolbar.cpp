@@ -1,0 +1,669 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+
+#include "base/Base.h"
+#include "base/AutoWin.h"
+#include "base/Win.h"
+#include "gui/Dpi.h"
+#include "base/Pixmap.h"
+
+#include "gui/UIModels.h"
+#include "gui/Layout.h"
+#include "gui/win/WinGui.h"
+#include "gui/PlatformFont.h"
+#include "gui/Gfx.h"
+#include "gui/GuiColors.h"
+#include "gui/VirtCtrl.h"
+#include "gui/VirtHost.h"
+
+#include "Settings.h"
+#include "DocController.h"
+#include "EngineBase.h"
+#include "DisplayModel.h"
+#include "TextSelection.h"
+#include "SumatraPDF.h"
+#include "MainWindow.h"
+#include "AIChatTypes.h"
+#include "WindowTab.h"
+#include "Canvas.h"
+#include "Selection.h"
+#include "Commands.h"
+#include "CommandAvailability.h"
+#include "AppSettings.h"
+#include "Translations.h"
+#include "Theme.h"
+#include "SvgIcons.h"
+#include "Toolbar.h"
+#include "Notifications.h"
+#include "SelectionToolbar.h"
+#include "SelectionToolbarCommon.h"
+
+// A small floating toolbar shown under/over a finished text selection with
+// the most common selection actions (copy, read aloud, highlight etc.).
+// Ported from dengxibo/sumatrapdf-plus (db0b32b7a and follow-ups); button
+// availability rewritten on top of CommandAvailability.
+
+constexpr const WCHAR* kSelectionToolbarClassName = L"SumatraSelectionToolbar";
+
+struct SelectionToolbar {
+    MainWindow* win = nullptr;
+    WindowTab* tab = nullptr; // tab the current selection belongs to
+    // the popup window; owns the row of buttons and the virtual controls
+    VirtHost* host = nullptr;
+    PlatformFont* font = nullptr;
+    Size size;
+    Rect lastPlaced;    // last screen rect we moved the window to (avoids redundant SetWindowPos)
+    Rect lastSelBounds; // last canvas-space selection bounds used for placement
+    DWORD lastPositionUpdateTick = 0;
+    Vec<SelectionToolbarButton> buttons;
+    Func1List<MainWindow*> onWindowMoved;
+};
+
+constexpr int kBtnPadX = 8; // horizontal padding inside a button
+constexpr int kBtnPadY = 4; // vertical padding inside a button
+constexpr int kMargin = 5;  // margin around the row of buttons
+constexpr int kBtnGap = 2;  // gap between buttons
+constexpr int kCornerRadius = 10;
+constexpr int kButtonRadius = 6;
+constexpr int kToolbarFontPct = 108;
+// Throttle position moves during frequent canvas paints (plus 3229c8b2c).
+constexpr DWORD kSelTbPositionUpdateMinMs = 32;
+
+static int SelectionBoundsSlack() {
+    return DpiScale(3);
+}
+
+static bool SelectionBoundsChanged(Rect a, Rect b, int slack) {
+    if (slack <= 0) {
+        return a != b;
+    }
+    return abs(a.x - b.x) > slack || abs(a.y - b.y) > slack || abs(a.dx - b.dx) > slack || abs(a.dy - b.dy) > slack;
+}
+
+// theme-derived colors for the floating card; light mode tints the page
+// render background so the card sits naturally over the document
+static bool SelBarIsDark() {
+    return !IsLightColor(ThemeWindowBackgroundColor());
+}
+
+static Color SelBarBg() {
+    if (SelBarIsDark()) {
+        return ThemeWindowBackgroundColor();
+    }
+    Color contentBg;
+    ThemePageRenderColors(contentBg);
+    return AccentColor(contentBg, 12);
+}
+
+static Color SelBarBorderColor() {
+    if (SelBarIsDark()) {
+        return AccentColor(ThemeWindowControlBackgroundColor(), 35);
+    }
+    return AccentColor(SelBarBg(), 8);
+}
+
+static Color SelBarTextColor() {
+    if (SelBarIsDark()) {
+        return ThemeWindowTextColor();
+    }
+    return MkRgb(27, 29, 33);
+}
+
+static Color SelBarMutedTextColor() {
+    if (SelBarIsDark()) {
+        return ThemeWindowTextDisabledColor();
+    }
+    return MkRgb(92, 96, 104);
+}
+
+static Color SelBarHoverBg(Color bg) {
+    if (SelBarIsDark()) {
+        return AccentColor(ThemeWindowControlBackgroundColor(), 15);
+    }
+    return AccentColor(bg, 10);
+}
+
+static void UpdateButtonIcons(SelectionToolbar* tb, int size) {
+    Color fgCol = SelBarTextColor();
+    Color disabledCol = SelBarMutedTextColor();
+    Color bgCol = SelBarBg();
+    for (SelectionToolbarButton& b : tb->buttons) {
+        if (len(b.svgIcon) == 0) {
+            continue;
+        }
+        b.icon = GetCachedPixmapForSvg(b.svgIcon, size, size, fgCol, bgCol);
+        b.iconDisabled = GetCachedPixmapForSvg(b.svgIcon, size, size, disabledCol, bgCol);
+    }
+}
+
+// The buttons are pills, not rectangles: they draw their hover background with
+// the same rounded corners as the card they sit on, so they get their own Paint
+// the hover highlight is a rounded rect this draws itself, so the button's own
+// box and border stay unpainted
+struct SelToolbarTextButton : VirtButton {
+    SelToolbarTextButton(Str s, PlatformFont* f) : VirtButton(s, f) {
+        SetColor(kColBtnBg, kColorTransparent);
+        SetColor(kColBtnBgHover, kColorTransparent);
+        SetColor(kColBtnBorder, kColorTransparent);
+    }
+    void Paint(VirtPaintCtx& ctx) override {
+        if (IsEnabled() && HasFlag(vwfHovered) && hoverBg != kColorUnset) {
+            int radius = DpiScale(kButtonRadius);
+            ctx.gfx->FillRoundedRect(ctx.bounds, radius, hoverBg);
+        }
+        VirtButton::Paint(ctx);
+    }
+    Color hoverBg = kColorUnset;
+};
+
+struct SelToolbarIconButton : VirtIconButton {
+    SelToolbarIconButton() {
+        SetColor(kColIconBtnBgHover, kColorTransparent);
+        SetColor(kColIconBtnBgSelected, kColorTransparent);
+    }
+    void Paint(VirtPaintCtx& ctx) override {
+        if (IsEnabled() && HasFlag(vwfHovered) && hoverBg != kColorUnset) {
+            int radius = DpiScale(kButtonRadius);
+            ctx.gfx->FillRoundedRect(ctx.bounds, radius, hoverBg);
+        }
+        VirtIconButton::Paint(ctx);
+    }
+    // square, as tall as the row: the icon is centered in it
+    Size GetIdealSize() override { return {sideLen, sideLen}; }
+    Color hoverBg = kColorUnset;
+    int sideLen = 0;
+};
+
+static void PaintSelectionToolbarSeparator(VirtCustom*, VirtPaintCtx* ctx) {
+    Rect r = ctx->bounds;
+    int inset = DpiScale(5);
+    int dy = r.dy - (2 * inset);
+    if (dy <= 0) {
+        return;
+    }
+    int x = r.x + (r.dx / 2);
+    ctx->gfx->FillRect({x, r.y + inset, 1, dy}, SelBarMutedTextColor());
+}
+
+static VirtCtrl* MakeSelectionToolbarSeparator(int rowDy) {
+    auto* sep = new VirtCustom();
+    sep->idealSize = {DpiScale(8), rowDy};
+    sep->onPaint = MkFunc1(PaintSelectionToolbarSeparator, sep);
+    sep->SetFlag(vwfNoHitTest, true);
+    return sep;
+}
+
+static bool GetSelectionEndPoint(MainWindow* win, Point& out);
+
+// The toolbar has done its job once an action is picked, so hide it until the
+// selection changes. Sticky-note placement records the selection end first,
+// because the command drops the selection.
+void InvokeSelectionToolbarCommand(MainWindow* win, int cmdId) {
+    SelectionToolbar* tb = win ? win->selectionToolbar : nullptr;
+    if (!tb || !cmdId) {
+        return;
+    }
+    LPARAM commandPoint = 0;
+    if (cmdId == CmdCreateAnnotText) {
+        Point selectionEnd;
+        if (GetSelectionEndPoint(win, selectionEnd)) {
+            commandPoint = MAKELPARAM(selectionEnd.x, selectionEnd.y);
+        }
+        DeleteOldSelectionInfo(win, true);
+    }
+    HideSelectionToolbar(win);
+    win->selectionToolbarDismissed = true;
+
+    if (cmdId != CmdCopySelection) {
+        HwndPostCommand(win->hwndFrame, cmdId, commandPoint);
+        return;
+    }
+    // run it now so the confirmation only follows a copy that happened
+    HwndSendCommand(win->hwndFrame, cmdId, commandPoint);
+    if (!HasPermission(Perm::CopySelection)) {
+        return;
+    }
+    NotificationCreateArgs args;
+    args.win = win;
+    args.groupId = kNotifCopiedToClipboard;
+    args.timeoutMs = kCopiedNotifTimeoutMs;
+    args.corner = NotifCorner::BottomLeft;
+    args.msg = Tr("Copied to clipboard");
+    RemoveNotificationsForGroup(win, kNotifCopiedToClipboard);
+    ShowNotification(args);
+}
+
+static void OnSelToolbarButtonClicked(SelectionToolbar* tb, VirtMouseEvent* ev) {
+    int cmdId = ev->target ? ev->target->id : 0;
+    if (!cmdId) {
+        return;
+    }
+    InvokeSelectionToolbarCommand(tb->win, cmdId);
+}
+
+// Build the layout tree for the current buttons and measure it into tb->size
+// (the window region is applied after SetWindowPos).
+static void LayoutToolbar(SelectionToolbar* tb) {
+    int padX = DpiScale(kBtnPadX);
+    int padY = DpiScale(kBtnPadY);
+    int margin = DpiScale(kMargin);
+    int gap = DpiScale(kBtnGap);
+
+    Color bgCol = SelBarBg();
+    Color hoverBg = SelBarHoverBg(bgCol);
+    Color textCol = SelBarTextColor();
+    Color mutedCol = SelBarMutedTextColor();
+
+    int textDy = PlatformFontMeasureText(tb->font, StrL("Mg")).dy;
+    int iconSize = ToolbarIconSize();
+    int rowDy = std::max(textDy, iconSize) + (2 * padY);
+    UpdateButtonIcons(tb, iconSize);
+
+    auto* box = new HBox();
+    box->alignCross = CrossAxisAlign::Stretch;
+    bool isFirst = true;
+    for (SelectionToolbarButton& b : tb->buttons) {
+        VirtCtrl* w;
+        if (b.cmdId == 0) {
+            w = MakeSelectionToolbarSeparator(rowDy);
+        } else if (b.svgIcon) {
+            auto* ib = new SelToolbarIconButton();
+            ib->pixmap = b.icon;
+            ib->pixmapDisabled = b.iconDisabled;
+            ib->sideLen = rowDy;
+            ib->hoverBg = hoverBg;
+            ib->SetTooltip(ButtonLabel(b));
+            ib->onClick = MkFunc1(OnSelToolbarButtonClicked, tb);
+            w = ib;
+        } else {
+            auto* tbtn = new SelToolbarTextButton(ButtonLabel(b), tb->font);
+            tbtn->textPadding = {padY, padX, padY, padX};
+            tbtn->SetColor(kColBtnText, textCol);
+            tbtn->SetColor(kColBtnTextDisabled, mutedCol);
+            tbtn->align = VirtTextAlign::Center;
+            tbtn->hoverBg = hoverBg;
+            tbtn->onClick = MkFunc1(OnSelToolbarButtonClicked, tb);
+            w = tbtn;
+        }
+        w->id = b.cmdId;
+        if (b.cmdId != 0) {
+            w->SetIsEnabled(b.enabled);
+        }
+        ILayout* child = w;
+        if (!isFirst) {
+            child = new Padding(w, Insets{0, 0, 0, gap});
+        }
+        isFirst = false;
+        box->AddChild(child);
+    }
+    auto* content = new Padding(box, Insets{margin, margin, margin, margin});
+    tb->size = tb->host->SetLayoutSizedToContent(content);
+}
+
+// Sticky-note (Text) annots are placed at a canvas point; use the selection end.
+// Ported from dengxibo/sumatrapdf-plus 89e4edfed.
+static bool GetSelectionEndPoint(MainWindow* win, Point& out) {
+    DisplayModel* dm = win->AsFixed();
+    if (!dm || !dm->textSelection || len(dm->textSelection->result) <= 0) {
+        return false;
+    }
+    Vec<TextSel>& result = dm->textSelection->result;
+    int i = len(result) - 1;
+    Rect r = dm->CvtToScreen(result[i].pageNo, ToRectF(result[i].rect));
+    if (r.IsEmpty()) {
+        return false;
+    }
+    out = Point(r.x + r.dx, r.y + (r.dy / 2));
+    return true;
+}
+
+// the card itself; the buttons on it are virtual controls painted on top
+static void PaintToolbar(SelectionToolbar*, VirtHostPaintEvent* ev) {
+    int cornerRadius = DpiScale(kCornerRadius);
+    ev->gfx->FillRoundedRect(ev->clientRect, cornerRadius, SelBarBg(), SelBarBorderColor());
+}
+
+bool IsSelectionToolbarVisible(MainWindow* win) {
+    SelectionToolbar* tb = win ? win->selectionToolbar : nullptr;
+    return tb && tb->host && tb->host->IsVisible();
+}
+
+// the part of the canvas a selection can show in
+Rect SelectionCanvasRect(MainWindow* win, DisplayModel*) {
+    return win->canvasRc;
+}
+
+// Prefer above the selection, fall back to below; clamp to the canvas.
+// Returns true if the window was moved/resized (caller may need a repaint).
+static bool PositionToolbar(SelectionToolbar* tb, const Rect& sel) {
+    MainWindow* win = tb->win;
+    Rect canvas = win->canvasRc;
+    int gap = DpiScale(6);
+    int w = tb->size.dx;
+    int h = tb->size.dy;
+
+    int x = sel.x + (sel.dx / 2) - (w / 2);
+    int y = sel.y - gap - h;
+    if (y < canvas.y) {
+        y = sel.y + sel.dy + gap;
+    }
+
+    int maxX = canvas.x + canvas.dx - w;
+    x = std::min(x, maxX);
+    x = std::max(x, canvas.x);
+    int maxY = canvas.y + canvas.dy - h;
+    y = std::min(y, maxY);
+    y = std::max(y, canvas.y);
+
+    Point p = HwndClientToScreen(win->hwndCanvas, Point(x, y));
+    Rect placed(p.x, p.y, w, h);
+    if (placed == tb->lastPlaced) {
+        return false;
+    }
+    // the region is window-relative, so a pure move (frame drag) must not
+    // SetWindowRgn — that is what jittered the bar on frequent updates
+    bool sizeChanged = tb->lastPlaced.dx != w || tb->lastPlaced.dy != h;
+    tb->lastPlaced = placed;
+    tb->host->SetBounds(placed);
+    if (sizeChanged) {
+        tb->host->ClipToRoundedRect(kCornerRadius, {w, h});
+    }
+    return true;
+}
+
+static SelectionToolbar* GetOrCreateToolbar(MainWindow* win) {
+    if (win->selectionToolbar) {
+        return win->selectionToolbar;
+    }
+    auto* tb = new SelectionToolbar();
+    tb->win = win;
+
+    VirtHost::CreateArgs args;
+    args.parent = win->hwndFrame;
+    args.className = WStr(kSelectionToolbarClassName);
+    args.isPopup = true;
+    args.visible = false;
+    // don't steal the focus from the canvas, so keyboard shortcuts keep working
+    args.noActivate = true;
+    args.userData = tb;
+
+    tb->host = VirtHost::Create(args);
+    if (!tb->host) {
+        delete tb;
+        return nullptr;
+    }
+    tb->host->onPaintBackground = MkFunc1(PaintToolbar, tb);
+    tb->font = GetScaledPlatformFont(GetAppFont(), kToolbarFontPct);
+    tb->onWindowMoved = MkFunc1Void(RepositionSelectionToolbar);
+    win->RegisterOnWindowMoved(&tb->onWindowMoved);
+    win->selectionToolbar = tb;
+    return tb;
+}
+
+// Parsed and laid-out selection toolbar state for -dbg-control tests.
+TempStr SelectionToolbarLayoutDumpTemp() {
+    Vec<int> ids;
+    CollectBuiltInSelectionToolbarCmds(ids);
+    str::Builder out;
+    out.Append(fmt("n=%d\n", len(ids)));
+    int nSvgIcons = 0;
+    for (int i = 0; i < len(ids); i++) {
+        out.Append(fmt("cmd=%d\n", ids[i]));
+        const SelectionToolbarButton* b = FindCandidateButton(ids[i]);
+        if (b && b->svgIcon) {
+            nSvgIcons++;
+        }
+    }
+    out.Append(fmt("svgIcons=%d\n", nSvgIcons));
+
+    MainWindow* win = len(gWindows) > 0 ? gWindows[0] : nullptr;
+    SelectionToolbar* tb = win ? GetOrCreateToolbar(win) : nullptr;
+    bool visible = tb && tb->host && tb->host->IsVisible();
+    out.Append(fmt("visible=%d\n", visible ? 1 : 0));
+    NotificationWnd* notif = win ? GetNotificationForGroup(win, kNotifCopiedToClipboard) : nullptr;
+    out.Append(fmt("notif=%s\n", notif ? NotificationGetMessageTemp(notif) : TempStr(StrL(""))));
+    if (visible) {
+        Rect r = tb->host->ScreenRect();
+        out.Append(fmt("placed=%d,%d,%d,%d\n", r.x, r.y, r.dx, r.dy));
+    }
+    if (!tb) {
+        out.Append(StrL("buttons=0\n"));
+        return ToStrTemp(out);
+    }
+    InitButtons(tb->buttons, win);
+    LayoutToolbar(tb);
+    int nSeparators = 0;
+    for (const SelectionToolbarButton& b : tb->buttons) {
+        if (b.cmdId == 0) {
+            nSeparators++;
+        }
+    }
+    out.Append(fmt("buttons=%d separators=%d toolbarSize=%d,%d mainIconSize=%d\n", len(tb->buttons), nSeparators,
+                   tb->size.dx, tb->size.dy, ToolbarIconSize()));
+    for (int i = 0; i < len(tb->buttons); i++) {
+        const SelectionToolbarButton& b = tb->buttons[i];
+        Str kind = b.cmdId == 0 ? StrL("separator") : (b.svgIcon ? StrL("icon") : StrL("text"));
+        int iconDx = b.icon ? b.icon->width : 0;
+        int iconDy = b.icon ? b.icon->height : 0;
+        out.Append(
+            fmt("button=%d cmd=%d kind=%s icon=%d,%d tooltip=%s\n", i, b.cmdId, kind, iconDx, iconDy, ButtonLabel(b)));
+    }
+    return ToStrTemp(out);
+}
+
+// Show the floating selection toolbar for the current text selection. Does
+// nothing if the feature is disabled (Annotations.SelectionToolbar) or there
+// is no on-screen text selection in a fixed-page document.
+static void ShowSelectionToolbarNow(MainWindow* win) {
+    if (!win || !gSettings->selectionToolbar) {
+        return;
+    }
+    // Do not check IsActivelySelecting here: OnSelectionStop schedules the show
+    // while mouseAction is still SelectingText (cleared only after it returns);
+    // by the time the debounce timer runs it is clear, and that is where a drag
+    // that is still going gets filtered out. Hide-during-drag is handled in
+    // UpdateSelectionToolbarPosition.
+    DisplayModel* dm = win->AsFixed();
+    if (!dm) {
+        return;
+    }
+    if (len(dm->textSelection->result) <= 0) {
+        return;
+    }
+    Rect sel;
+    if (!GetSelectionBounds(win, sel)) {
+        return;
+    }
+    SelectionToolbar* tb = GetOrCreateToolbar(win);
+    if (!tb) {
+        return;
+    }
+    tb->tab = win->CurrentTab();
+    tb->lastPositionUpdateTick = GetTickCount();
+    tb->lastSelBounds = sel;
+    InitButtons(tb->buttons, win);
+    if (len(tb->buttons) == 0) {
+        return;
+    }
+    LayoutToolbar(tb);
+    // Force SetWindowPos + region even if lastPlaced matched (e.g. after hide).
+    tb->lastPlaced = Rect();
+    PositionToolbar(tb, sel);
+    tb->host->Show(true);
+    tb->host->Invalidate(false);
+}
+
+// cancel a pending debounced show (the selection went away or is being redone)
+static void CancelPendingShow(MainWindow* win) {
+    if (!win || !win->selectionToolbarShowPending) {
+        return;
+    }
+    win->selectionToolbarShowPending = false;
+    if (win->hwndCanvas) {
+        KillTimer(win->hwndCanvas, kSelectionToolbarShowTimerID);
+    }
+}
+
+// A released mouse button is a finished selection: show at once (#6239). The
+// toolbar pops up over the document, right where the user is reading, so for
+// a selection still changing (keyboard nudges, repaints) wait for it to settle
+// first. Repeated requests during the wait keep the original deadline instead
+// of pushing it back, so a stream of canvas repaints (UpdateSelectionToolbarPosition
+// asks on every one) can't starve the timer.
+void ShowSelectionToolbar(MainWindow* win, SelToolbarShow when) {
+    if (!win || !win->hwndCanvas || !gSettings->selectionToolbar) {
+        return;
+    }
+    if (win->selectionToolbar && win->selectionToolbarDismissed) {
+        return;
+    }
+    if (when == SelToolbarShow::Now) {
+        CancelPendingShow(win);
+        ShowSelectionToolbarNow(win);
+        return;
+    }
+    if (win->selectionToolbarShowPending) {
+        return;
+    }
+    win->selectionToolbarShowPending = true;
+    SetTimer(win->hwndCanvas, kSelectionToolbarShowTimerID, kSelectionToolbarShowDelayInMs, nullptr);
+}
+
+// fired by kSelectionToolbarShowTimerID
+void SelectionToolbarOnShowTimer(MainWindow* win) {
+    if (!win || !win->hwndCanvas) {
+        return;
+    }
+    KillTimer(win->hwndCanvas, kSelectionToolbarShowTimerID);
+    win->selectionToolbarShowPending = false;
+    // the selection may be gone or still being dragged by now; both self-guard
+    if (IsActivelySelecting(win)) {
+        return;
+    }
+    ShowSelectionToolbarNow(win);
+}
+
+// Reposition the toolbar so it keeps following the selection (called from the
+// canvas paint routine). Hides it if the selection scrolled out of view or the
+// current tab changed; re-shows it after e.g. a repaint restored the selection.
+void UpdateSelectionToolbarPosition(MainWindow* win) {
+    if (!win) {
+        return;
+    }
+    // Hide during drag so the bar does not chase the rubber-band selection.
+    if (IsActivelySelecting(win)) {
+        SelectionToolbar* activeTb = win->selectionToolbar;
+        if (activeTb && activeTb->host && activeTb->host->IsVisible()) {
+            HideSelectionToolbar(win);
+        }
+        return;
+    }
+    SelectionToolbar* tb = win->selectionToolbar;
+    if (!tb || !tb->host || !tb->host->IsVisible()) {
+        if (win->showSelection) {
+            ShowSelectionToolbar(win, SelToolbarShow::Settled);
+        }
+        return;
+    }
+    if (!IsCurrentTab(win, tb->tab)) {
+        HideSelectionToolbar(win);
+        if (win->showSelection) {
+            ShowSelectionToolbar(win, SelToolbarShow::Settled);
+        }
+        return;
+    }
+    Rect sel;
+    if (!GetSelectionBounds(win, sel)) {
+        HideSelectionToolbar(win);
+        return;
+    }
+    // Canvas-space bounds are unchanged on a frame move (and on many canvas
+    // paints, e.g. read-aloud). Still recompute screen placement — cheap when
+    // lastPlaced already matches — so a sidebar resize that shifted hwndCanvas
+    // does not leave the popup behind. Skip InitButtons/LayoutToolbar/Invalidate
+    // on this path; those are what jittered the bar (plus 3229c8b2c).
+    int slack = SelectionBoundsSlack();
+    if (!SelectionBoundsChanged(sel, tb->lastSelBounds, slack)) {
+        PositionToolbar(tb, sel);
+        return;
+    }
+    DWORD now = GetTickCount();
+    if (tb->lastPositionUpdateTick != 0 && now - tb->lastPositionUpdateTick < kSelTbPositionUpdateMinMs) {
+        return;
+    }
+    tb->lastPositionUpdateTick = now;
+    tb->lastSelBounds = sel;
+
+    InitButtons(tb->buttons, win);
+    LayoutToolbar(tb);
+    if (PositionToolbar(tb, sel)) {
+        tb->host->Invalidate(false);
+    }
+}
+
+// Keep the popup on the selection when the frame moves. Canvas-space bounds
+// do not change, and a move typically does not paint the canvas, so the
+// paint-path update never runs; onWindowMoved (and layout/DPI) call this instead.
+void RepositionSelectionToolbar(MainWindow* win) {
+    if (!win) {
+        return;
+    }
+    SelectionToolbar* tb = win->selectionToolbar;
+    if (!tb || !tb->host || !tb->host->IsVisible()) {
+        return;
+    }
+    Rect sel;
+    if (!GetSelectionBounds(win, sel)) {
+        return;
+    }
+    PositionToolbar(tb, sel);
+}
+
+void RefreshSelectionToolbarIcons(MainWindow* win) {
+    SelectionToolbar* tb = win ? win->selectionToolbar : nullptr;
+    if (!tb || !tb->host || !tb->host->IsVisible()) {
+        return;
+    }
+    LayoutToolbar(tb);
+    tb->host->Invalidate(false);
+}
+
+// Hide the toolbar but keep the window around for reuse.
+void HideSelectionToolbar(MainWindow* win) {
+    CancelPendingShow(win);
+    SelectionToolbar* tb = win ? win->selectionToolbar : nullptr;
+    if (!tb || !tb->host) {
+        return;
+    }
+    if (tb->host->IsVisible()) {
+        tb->host->Show(false);
+    }
+    if (tb->host->vroot) {
+        // the mouse can't leave a hidden window, so drop the hover ourselves
+        tb->host->vroot->ClearHover();
+        tb->host->vroot->ClearPressed();
+    }
+    tb->tab = nullptr;
+    tb->lastPlaced = Rect();
+    tb->lastSelBounds = Rect();
+}
+
+// Destroy the toolbar window and free its state.
+void DeleteSelectionToolbar(MainWindow* win) {
+    CancelPendingShow(win);
+    SelectionToolbar* tb = win ? win->selectionToolbar : nullptr;
+    if (!tb) {
+        return;
+    }
+    win->UnregisterOnWindowMoved(&tb->onWindowMoved);
+    // ~VirtHost deletes the layout first: the buttons report their
+    // destruction to the root
+    delete tb->host;
+    delete tb;
+    win->selectionToolbar = nullptr;
+    win->selectionToolbarDismissed = false;
+}
+
+Vec<SelectionToolbarButton>* SelectionToolbarButtons(MainWindow* win) {
+    return &win->selectionToolbar->buttons;
+}

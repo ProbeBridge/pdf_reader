@@ -1,0 +1,568 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: Simplified BSD (see COPYING.BSD) */
+
+#include "base/Base.h"
+#include "base/Pixmap.h"
+
+// must be last due to assert() over-write
+#include "base/tests/UtAssert.h"
+
+struct TestFn0Data {
+    int n = 0;
+};
+
+static void testFn0(TestFn0Data* d) {
+    d->n++;
+}
+
+static void Func0Test() {
+    TestFn0Data d;
+    auto fn = MkFunc0(testFn0, &d);
+    fn.Call();
+    utassert(d.n == 1);
+}
+
+struct TestFn1Data {
+    int p = 0;
+};
+
+static void testFn1(TestFn0Data* d0, TestFn1Data* d1) {
+    d0->n = 5;
+    d1->p = -8;
+}
+
+static void Func1Test() {
+    TestFn0Data d0;
+    TestFn1Data d1;
+    auto fn = MkFunc1<TestFn0Data, TestFn1Data*>(testFn1, &d0);
+    fn.Call(&d1);
+    utassert(d0.n == 5);
+    utassert(d1.p == -8);
+}
+
+static int gFn0VoidCalls = 0;
+
+static void testFn0Void() {
+    gFn0VoidCalls++;
+}
+
+// a Func0 can stand in for a Func1: Call() drops the argument. The conversion
+// stores a void(void*) in a void(void*, T) slot, so this checks the dispatch
+// actually lands in the right function rather than merely compiling.
+static void Func1FromFunc0Test() {
+    TestFn0Data d0;
+    TestFn1Data d1{.p = 7};
+
+    // the drops-argument flag lives in userData's low bit, so Func1 is still
+    // two words - a bool member would have cost 8 more after padding
+    utassert(sizeof(Func1<TestFn1Data*>) == 2 * sizeof(void*));
+
+    Func1<TestFn1Data*> fn = MkFunc0(testFn0, &d0);
+    utassert(fn.IsValid());
+    fn.Call(&d1);
+    utassert(d0.n == 1); // the Func0 ran
+    utassert(d1.p == 7); // and never saw the argument
+
+    fn.Call(nullptr); // dropped, so a null argument is harmless
+    utassert(d0.n == 2);
+
+    // the no-user-data flavour, where Func0 holds a void()
+    gFn0VoidCalls = 0;
+    Func1<TestFn1Data*> fnv = MkFunc0Void(testFn0Void);
+    fnv.Call(&d1);
+    utassert(gFn0VoidCalls == 1);
+    utassert(d1.p == 7);
+
+    // copies keep dropping the argument
+    Func1<TestFn1Data*> copy = fn;
+    copy.Call(&d1);
+    utassert(d0.n == 3);
+    utassert(d1.p == 7);
+
+    // a real Func1 still gets its argument
+    Func1<TestFn1Data*> real = MkFunc1<TestFn0Data, TestFn1Data*>(testFn1, &d0);
+    real.Call(&d1);
+    utassert(d0.n == 5);
+    utassert(d1.p == -8);
+}
+
+static void testFn1List(TestFn0Data* d0, TestFn1Data* d1) {
+    d0->n++;
+    d1->p++;
+}
+
+static void Func1ListTest() {
+    utassert(sizeof(Func1List<TestFn1Data*>) == 3 * sizeof(void*));
+
+    TestFn0Data a, b, c;
+    TestFn1Data arg{};
+    Func1List<TestFn1Data*> na = MkFunc1(testFn1List, &a);
+    Func1List<TestFn1Data*> nb = MkFunc1(testFn1List, &b);
+    Func1List<TestFn1Data*> nc = MkFunc1(testFn1List, &c);
+    Func1List<TestFn1Data*>* head = nullptr;
+
+    na.Register(&head);
+    nb.Register(&head);
+    nc.Register(&head);
+    utassert(head == &nc);
+    utassert(nc.next == &nb && nb.next == &na && !na.next);
+
+    head->CallAll(&arg);
+    utassert(a.n == 1 && b.n == 1 && c.n == 1 && arg.p == 3);
+
+    // assigning a new Func1 must not unlink the node
+    nb = MkFunc1(testFn1List, &b);
+    utassert(nc.next == &nb && nb.next == &na);
+
+    nb.Unregister(&head);
+    utassert(head == &nc && nc.next == &na && !nb.next);
+
+    a.n = b.n = c.n = 0;
+    arg.p = 0;
+    head->CallAll(&arg);
+    utassert(a.n == 1 && b.n == 0 && c.n == 1 && arg.p == 2);
+
+    // unregistering a node that isn't on the list is a no-op
+    nb.Unregister(&head);
+    utassert(head == &nc && nc.next == &na);
+
+    na.Unregister(&head);
+    nc.Unregister(&head);
+    utassert(!head);
+}
+
+static void GeomTest() {
+    PointF ptD(12.4f, -13.6f);
+    Point ptI = ToPoint(ptD);
+    utassert(ptI.x == 12 && ptI.y == -13);
+
+    SizeF szD(7.7f, -3.3f);
+    Size szI(8, -3);
+
+    utassert(!szD.IsEmpty() && !szI.IsEmpty());
+    utassert(Size().IsEmpty() && SizeF().IsEmpty());
+
+    struct SRIData {
+        int x1s, x1e, y1s, y1e;
+        int x2s, x2e, y2s, y2e;
+        bool intersect;
+        int i_xs, i_xe, i_ys, i_ye;
+        int u_xs, u_xe, u_ys, u_ye;
+    } testData[] = {
+        {0, 10, 0, 10, 0, 10, 0, 10, true, 0, 10, 0, 10, 0, 10, 0, 10},  /* complete intersect */
+        {0, 10, 0, 10, 20, 30, 20, 30, false, 0, 0, 0, 0, 0, 30, 0, 30}, /* no intersect */
+        {0, 10, 0, 10, 5, 15, 0, 10, true, 5, 10, 0, 10, 0, 15, 0, 10},  /* { | } | */
+        {0, 10, 0, 10, 5, 7, 0, 10, true, 5, 7, 0, 10, 0, 10, 0, 10},    /* { | | } */
+        {0, 10, 0, 10, 5, 7, 5, 7, true, 5, 7, 5, 7, 0, 10, 0, 10},
+        {0, 10, 0, 10, 5, 15, 5, 15, true, 5, 10, 5, 10, 0, 15, 0, 15},
+    };
+
+    for (size_t i = 0; i < dimof(testData); i++) {
+        struct SRIData* curr = &testData[i];
+
+        Rect rx1(curr->x1s, curr->y1s, curr->x1e - curr->x1s, curr->y1e - curr->y1s);
+        Rect rx2 = Rect::FromXY(curr->x2s, curr->y2s, curr->x2e, curr->y2e);
+        Rect isect = rx1.Intersect(rx2);
+        if (curr->intersect) {
+            utassert(!isect.IsEmpty());
+            utassert(isect.x == curr->i_xs && isect.y == curr->i_ys);
+            utassert(isect.x + isect.dx == curr->i_xe && isect.y + isect.dy == curr->i_ye);
+        } else {
+            utassert(isect.IsEmpty());
+        }
+        Rect urect = rx1.Union(rx2);
+        utassert(urect.x == curr->u_xs && urect.y == curr->u_ys);
+        utassert(urect.x + urect.dx == curr->u_xe && urect.y + urect.dy == curr->u_ye);
+
+        /* if we swap rectangles, the results should be the same */
+        std::swap(rx1, rx2);
+        isect = rx1.Intersect(rx2);
+        if (curr->intersect) {
+            utassert(!isect.IsEmpty());
+            utassert(isect.x == curr->i_xs && isect.y == curr->i_ys);
+            utassert(isect.x + isect.dx == curr->i_xe && isect.y + isect.dy == curr->i_ye);
+        } else {
+            utassert(isect.IsEmpty());
+        }
+        urect = rx1.Union(rx2);
+        utassert(Rect::FromXY(curr->u_xs, curr->u_ys, curr->u_xe, curr->u_ye) == urect);
+
+        utassert(!rx1.Contains(Point(-2, -2)));
+        utassert(rx1.Contains(rx1.TL()));
+        utassert(!rx1.Contains(Point(rx1.x, INT_MAX)));
+        utassert(!rx1.Contains(Point(INT_MIN, rx1.y)));
+    }
+}
+
+static int roundUpTestCases[] = {
+    0, 0, 1, 8, 2, 8, 3, 8, 4, 8, 5, 8, 6, 8, 7, 8, 8, 8, 9, 16,
+};
+
+struct ListNode {
+    struct ListNode* next = nullptr;
+    int n = 0;
+    ListNode() = default;
+};
+
+static void CheckListOrder(ListNode* root, int* seq) {
+    ListNode* el = root;
+    for (int n = *seq; n >= 0; n = *(++seq)) {
+        utassert(el->n == n);
+        el = el->next;
+    }
+    utassert(!el);
+}
+
+static void ListTest() {
+    int n = 5;
+
+    static int orderReverse[] = {5, 4, 3, 2, 1, -1};
+    static int orderNormal[] = {1, 2, 3, 4, 5, -1};
+    {
+        ListNode* root = nullptr;
+        for (int i = 1; i <= n; i++) {
+            auto node = new ListNode();
+            node->n = i;
+            ListInsertFront(&root, node);
+        }
+        CheckListOrder(root, orderReverse);
+        ListReverse(&root);
+        CheckListOrder(root, orderNormal);
+        ListDelete(root);
+    }
+    {
+        ListNode* root = nullptr;
+        for (int i = 1; i <= n; i++) {
+            auto node = new ListNode();
+            node->n = i;
+            ListInsertEnd(&root, node);
+        }
+        CheckListOrder(root, orderNormal);
+        ListDelete(root);
+    }
+}
+
+static void ColorTest() {
+    ParsedColor parsed;
+    ParseColor(parsed, StrL("#f2f2f2"));
+    utassert(parsed.parsedOk);
+    utassert(parsed.col == MkRgb(0xf2, 0xf2, 0xf2));
+
+    parsed = {};
+    ParseColor(parsed, StrL("#80f2f2f2"));
+    utassert(parsed.parsedOk);
+    utassert(parsed.col == MkRgba(0xf2, 0xf2, 0xf2, 0x80));
+
+    parsed = {};
+    ParseColor(parsed, StrL("#f2f2f"));
+    utassert(!parsed.parsedOk);
+
+    // One Dark disabled text on a lifted button fill is too close; boost it
+    Color oneDarkBg = MkRgb(0x21, 0x25, 0x2b);
+    Color oneDarkBtn = AccentColor(oneDarkBg, 14);
+    Color oneDarkDis = MkRgb(0x5c, 0x63, 0x70);
+    Color boosted = EnsureContrast(oneDarkDis, oneDarkBtn, 80);
+    utassert(abs((int)GetLightness(boosted) - (int)GetLightness(oneDarkBtn)) >= 80);
+
+    // already-contrasty pair is left alone
+    Color lightFg = MkRgb(0xf9, 0xfa, 0xfb);
+    Color blackBg = MkRgb(0, 0, 0);
+    utassert(EnsureContrast(lightFg, blackBg, 80) == lightFg);
+
+    // 45-degree diamond: center inside, a point beside it outside
+    QuadF diamond;
+    diamond.ul = {0, 10};
+    diamond.ur = {10, 0};
+    diamond.ll = {10, 20};
+    diamond.lr = {20, 10};
+    utassert(diamond.IsRotated());
+    utassert(diamond.Contains({10, 10}));
+    utassert(!diamond.Contains({0, 0}));
+}
+
+// An allocation bigger than a block gets a block sized for it alone, and that
+// block stays the current one. The next small allocation chains off it and
+// must not inherit its size: reserving is cheap, but a block made for a big
+// allocation commits everything it reserves, so inheriting would commit the
+// whole of it for a handful of bytes.
+static void ArenaChainedBlockSizeTest() {
+    Arena* a = ArenaNew();
+    utassert(a != nullptr);
+    u64 reserveChunk = a->reserveChunkSize;
+    u64 commitChunk = a->commitChunkSize;
+    utassert(reserveChunk > 0 && commitChunk > 0);
+
+    // one allocation too big for a block of the usual size
+    void* big = a->Push(reserveChunk + 4096, 8, false);
+    utassert(big != nullptr);
+    utassert(a->current->reserved > reserveChunk);
+    utassert(a->current != a);
+
+    // fill what page alignment left over at the end of it, so the next push
+    // is the one that chains
+    u64 left = a->current->reserved - a->current->pos;
+    if (left > 0) {
+        utassert(a->Push(left, 1, false) != nullptr);
+    }
+
+    void* tail = a->Push(64, 8, false);
+    utassert(tail != nullptr);
+    utassert(a->current->reserved == reserveChunk);
+    utassert(a->current->committed == commitChunk);
+    ArenaDelete(a);
+}
+
+#if IS_DEBUG
+static void OtherThreadSeesLock(Mutex* m) {
+    utassert(!m->IsHeldByCurrentThread());
+}
+
+// debug builds track the holder, so "caller holds X" can be asserted
+static void MutexOwnerTest() {
+    Mutex m;
+    utassert(!m.IsHeldByCurrentThread());
+    m.Lock();
+    utassert(m.IsHeldByCurrentThread());
+#if !OS_WASM
+    ThreadHandle t = StartThread(MkFunc0(OtherThreadSeesLock, &m), StrL("MutexOwnerTest"));
+    JoinThread(&t, -1);
+#endif
+    m.Unlock();
+    utassert(!m.IsHeldByCurrentThread());
+    utassert(m.TryLock());
+    utassert(m.IsHeldByCurrentThread());
+    m.Unlock();
+
+    RecursiveMutex rm;
+    rm.Lock();
+    rm.Lock();
+    rm.Unlock();
+    utassert(rm.IsHeldByCurrentThread());
+    rm.Unlock();
+    utassert(!rm.IsHeldByCurrentThread());
+}
+#endif
+
+// ReportIf() evaluates to its condition, once, so callers can bail out in release
+static void ReportIfReturnsCondTest() {
+    int n = 0;
+    bool reported = ReportIf(++n > 5);
+    utassert(!reported);
+    utassert(n == 1);
+    if (ReportDebugIf(n == 2)) {
+        utassert(false);
+    }
+    int* p = &n;
+    utassert(!ReportIf(!p));
+}
+
+// A size that wraps pos + size (e.g. a negative int cast to u64) must fail,
+// not move pos backwards over live allocations.
+static void ArenaPushOverflowTest() {
+    Arena* a = ArenaNew();
+    utassert(a != nullptr);
+    utassert(a->Push(64, 8, false) != nullptr);
+    u64 pos = a->current->pos;
+
+    utassert(a->Push((u64)-16, 8, false) == nullptr);
+    utassert(a->Push((u64)(int)-1, 1, true) == nullptr);
+    utassert(a->current->pos == pos);
+    ArenaDelete(a);
+}
+
+// a push that doesn't fit chains a new block, positioned after the previous one
+static void ArenaChainTest() {
+    ArenaParams params = ArenaDefaultParams();
+    params.reserveSize = 4 * 1024;
+    params.commitSize = 4 * 1024;
+    Arena* a = ArenaNew(params);
+    utassert(a != nullptr);
+    utassert(a->current == a);
+    utassert(a->basePos == 0);
+
+    // ArenaNew rounds the reserve up to a page, and a page is 16K on arm64
+    // macOS, not 4K - so size the pushes from the block we actually got.
+    // Two of these plus kArenaHeaderSize can't fit in one block.
+    u64 half = a->reserved / 2;
+
+    void* p1 = a->Push(half, 8, true);
+    utassert(p1 != nullptr);
+    utassert(a->current == a);
+
+    void* p2 = a->Push(half, 8, true);
+    utassert(p2 != nullptr);
+    utassert(a->current != a);
+    utassert(a->current->prev == a);
+    utassert(a->current->basePos == a->reserved);
+    ((char*)p2)[0] = 'Z';
+    utassert(((char*)p2)[0] == 'Z');
+
+    ArenaDelete(a);
+}
+
+#if OS_POSIX && !OS_WASM
+static AtomicBool gTimedJoinFinished;
+
+static void TimedJoinWorker() {
+    SleepInMs(50);
+    AtomicBoolSet(&gTimedJoinFinished, true);
+}
+
+static void TimedJoinTest() {
+    AtomicBoolSet(&gTimedJoinFinished, false);
+    ThreadHandle thread = StartThread(MkFunc0Void(TimedJoinWorker), StrL("timed-join-test"));
+    utassert(thread != nullptr);
+    utassert(!JoinThread(&thread, 1));
+    utassert(thread == nullptr);
+    // the detached worker still finishes; poll, a loaded CI runner can take long
+    for (int i = 0; i < 500 && !AtomicBoolGet(&gTimedJoinFinished); i++) {
+        SleepInMs(10);
+    }
+    utassert(AtomicBoolGet(&gTimedJoinFinished));
+
+    AtomicBoolSet(&gTimedJoinFinished, false);
+    thread = StartThread(MkFunc0Void(TimedJoinWorker), StrL("timed-join-test"));
+    utassert(JoinThread(&thread, 500));
+    utassert(thread == nullptr);
+    utassert(AtomicBoolGet(&gTimedJoinFinished));
+}
+#endif
+
+#if !OS_WASM
+static AtomicBool gWaitThreadFinished;
+
+static void WaitThreadWorker() {
+    SleepInMs(50);
+    AtomicBoolSet(&gWaitThreadFinished, true);
+}
+
+// WaitThread() leaves the handle open: it can be waited on again and is closed
+// by its owner, before or after the thread ends.
+static void WaitThreadTest() {
+    AtomicBoolSet(&gWaitThreadFinished, false);
+    ThreadHandle thread = StartThread(MkFunc0Void(WaitThreadWorker), StrL("wait-thread-test"));
+    utassert(thread != nullptr);
+    utassert(!WaitThread(thread, 1));
+    utassert(thread != nullptr);
+    utassert(WaitThread(thread, -1));
+    utassert(AtomicBoolGet(&gWaitThreadFinished));
+    utassert(WaitThread(thread, 0));
+    utassert(SafeCloseThreadHandle(&thread));
+    utassert(thread == nullptr);
+    utassert(!WaitThread(nullptr, 0));
+
+    // closed while still running
+    AtomicBoolSet(&gWaitThreadFinished, false);
+    thread = StartThread(MkFunc0Void(WaitThreadWorker), StrL("wait-thread-test"));
+    utassert(SafeCloseThreadHandle(&thread));
+    // poll, a loaded CI runner can take long
+    for (int i = 0; i < 500 && !AtomicBoolGet(&gWaitThreadFinished); i++) {
+        SleepInMs(10);
+    }
+    utassert(AtomicBoolGet(&gWaitThreadFinished));
+}
+#endif
+
+// CmdToggleMirror prints through FlipPixmapHorizontally: 3 and 4 byte pixels,
+// odd widths (the middle pixel stays), padded rows
+static void FlipPixmapTest() {
+    PixmapFormat formats[] = {PixmapFormat::BGR8, PixmapFormat::BGRA8};
+    for (PixmapFormat fmt : formats) {
+        constexpr int kDx = 3;
+        constexpr int kDy = 2;
+        Pixmap* p = AllocPixmap(kDx, kDy, fmt);
+        int bpp = PixmapBytesPerPixel(fmt);
+        for (int y = 0; y < kDy; y++) {
+            for (int x = 0; x < kDx; x++) {
+                for (int b = 0; b < bpp; b++) {
+                    p->data[(y * p->stride) + (x * bpp) + b] = (u8)((y * 100) + (x * 10) + b);
+                }
+            }
+        }
+        FlipPixmapHorizontally(p);
+        for (int y = 0; y < kDy; y++) {
+            for (int x = 0; x < kDx; x++) {
+                for (int b = 0; b < bpp; b++) {
+                    u8 want = (u8)((y * 100) + ((kDx - 1 - x) * 10) + b);
+                    utassert(p->data[(y * p->stride) + (x * bpp) + b] == want);
+                }
+            }
+        }
+        FreePixmap(p);
+    }
+}
+
+void BaseUtilTest() {
+    FlipPixmapTest();
+#if !OS_WASM
+    WaitThreadTest();
+#endif
+    ListTest();
+    Func0Test();
+    Func1Test();
+    Func1FromFunc0Test();
+    Func1ListTest();
+    ColorTest();
+    ReportIfReturnsCondTest();
+#if IS_DEBUG
+    MutexOwnerTest();
+#endif
+    ArenaChainedBlockSizeTest();
+    ArenaPushOverflowTest();
+    ArenaChainTest();
+#if OS_POSIX && !OS_WASM
+    TimedJoinTest();
+#endif
+
+    size_t n = dimof(roundUpTestCases) / 2;
+    for (size_t i = 0; i < n; i++) {
+        int v = roundUpTestCases[i * 2];
+        int exp = roundUpTestCases[(i * 2) + 1];
+        int got = RoundUp(v, 8);
+        utassert(exp == got);
+        void* got3 = RoundUp((void*)(uintptr_t)v, 8);
+        utassert(got3 == (void*)(uintptr_t)exp);
+    }
+
+    utassert(RoundToPowerOf2(0) == 1);
+    utassert(RoundToPowerOf2(1) == 1);
+    utassert(RoundToPowerOf2(2) == 2);
+    utassert(RoundToPowerOf2(3) == 4);
+    utassert(RoundToPowerOf2(15) == 16);
+    utassert(RoundToPowerOf2((1 << 13) + 1) == (1 << 14));
+    utassert(RoundToPowerOf2((1 << 30) + 1) == -1); // overflow: no power of 2 fits in an int
+
+    utassert(WCharToLower('A') == 'a');
+    utassert(WCharToLower('Z') == 'z');
+    utassert(WCharToLower('a') == 'a');
+    utassert(WCharToLower('0') == '0');
+    utassert(WCharToLower(0x00C9) == 0x00E9); // É -> é
+    utassert(WCharToLower(0x0410) == 0x0430); // А -> а
+
+    utassert(FoldCaseRune(0x0130) == 'i');       // İ -> i
+    utassert(FoldDiacriticsRune(0x00E9) == 'e'); // é -> e
+    utassert(FoldDiacriticsRune(0x0141) == 'L'); // Ł -> L
+    utassert(FoldDiacriticsRune(0x0105) == 'a'); // ą -> a
+    utassert(FoldDiacriticsRune(0x0386) == 0x0391);
+    utassert(FoldDiacriticsRune(0x0401) == 0x0415);
+    utassert(FoldDiacriticsRune(0x1ea1) == 'a');
+    utassert(FoldDiacriticsRune(0x1f82) == 0x03b1);
+    utassert(FoldDiacriticsRune(0x212b) == 'A');
+    utassert(FoldDiacriticsRune(0x0430) == 0x0430);
+    utassert(IsCombiningMark(0x0301));
+
+    utassert(MurmurHash2(nullptr, 0) == 0);
+    utassert(MurmurHash2("test", 4) != MurmurHash2("Test", 4));
+
+    utassert(addOverflows<u8>(255, 1));
+    utassert(addOverflows<u8>(255, 2));
+    utassert(addOverflows<u8>(255, 255));
+    utassert(!addOverflows<u8>(254, 1));
+    utassert(!addOverflows<u8>(127, 1));
+    utassert(!addOverflows<u8>(127, 127));
+    utassert(!addOverflows<u8>(127, 128));
+    utassert(addOverflows<u8>(127, 129));
+    utassert(addOverflows<u8>(127, 255));
+
+    GeomTest();
+}

@@ -1,0 +1,542 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+
+#include "base/Base.h"
+#include "base/File.h"
+#include "base/Win.h"
+#include "base/GuessFileType.h"
+#include "base/UITask.h"
+#include "gui/UIModels.h"
+#include "Settings.h"
+#include "DisplayMode.h"
+#include "DocController.h"
+#include "EngineBase.h"
+#include "EngineAll.h"
+#include "ChmModel.h"
+#include "MarkdownModel.h"
+#include "DisplayModel.h"
+#include "ProgressUpdateUI.h"
+#include "Notifications.h"
+#include "ReadAloud.h"
+#include "ReadingAutoScroll.h"
+#include "TextSelection.h"
+#include "Annotation.h"
+#include "TextSearch.h"
+#include "SumatraPDF.h"
+#include "AIChatTypes.h"
+#include "AIChatCommon.h"
+#include "AIChatPanel.h"
+#include "SelectionToolbar.h"
+#include "AnnotEditToolbar.h"
+#include "AnnotTextPopup.h"
+#include "AnnotFilterToolbar.h"
+#include "FindBar.h"
+#include "FindWindow.h"
+#include "SearchAndDDE.h"
+#include "RefHover.h"
+#include "WindowTab.h"
+#include "Tabs.h"
+#include "TableOfContents.h"
+#include "StressTesting.h"
+#include "ExternalViewers.h"
+#include "CommandAvailability.h"
+#include "HomePage.h"
+#include "MainWindow.h"
+#include "Selection.h"
+#include "MainWindowCommon.h"
+
+Vec<MainWindow*> gWindows;
+
+bool MainWindow::HasDocsLoaded() const {
+    int nTabs = TabCount();
+    if (nTabs == 0) {
+        // logf("HasDocsLoaded: false because nTabs == 0\n");
+        return true;
+    }
+    for (int i = 0; i < nTabs; i++) {
+        auto* tab = GetTab(i);
+        if (!tab->IsAboutTab()) {
+            // logf("HasDocsLoaded: true because GetTab(i) !IsAboutTab()\n");
+            return true;
+        }
+    }
+    // logf("HasDocsLoaded: false because all %d tabs are IsAboutTab()\n", nTabs);
+    return false;
+}
+
+bool MainWindow::IsCurrentTabAbout() const {
+    return nullptr == CurrentTab() || CurrentTab()->IsAboutTab();
+}
+
+DisplayModel* MainWindow::AsFixed() const {
+    return ctrl ? ctrl->AsFixed() : nullptr;
+}
+
+ChmModel* MainWindow::AsChm() const {
+    return ctrl ? ctrl->AsChm() : nullptr;
+}
+
+MarkdownModel* MainWindow::AsMarkdown() const {
+    return ctrl ? ctrl->AsMarkdown() : nullptr;
+}
+
+BrowserDocController* MainWindow::AsBrowser() const {
+    return ctrl ? ctrl->AsBrowser() : nullptr;
+}
+
+bool MainWindow::InPresentation() const {
+    return windowMode >= WindowMode::Presentation;
+}
+
+// Convert file:// / file:/// / file: URIs to a local path (+ optional #fragment).
+// Returns false if uri is not a file: scheme.
+bool PathFromFileUriTemp(Str uri, TempStr* pathOut, Str* fragmentOut) {
+    Str rest = uri;
+    if (!str::TrimPrefixI(rest, StrL("file:"))) {
+        return false;
+    }
+    // file://host/path or file:///path → drop authority (// or ///)
+    if (str::TrimPrefix(rest, StrL("//"))) {
+        // empty host: next char is / of absolute path
+        if (rest && rest.s[0] == '/') {
+            // Windows drive path: /C:/foo → C:/foo
+            if (rest.len >= 3 && rest.s[1] && rest.s[2] == ':') {
+                rest = Str(rest.s + 1, rest.len - 1);
+            }
+        }
+    }
+    TempStr path = str::DupTemp(rest);
+    Str pathStr = path;
+    Str frag = str::SliceFromChar(pathStr, '#');
+    if (frag) {
+        pathStr = Str(pathStr.s, (int)(frag.s - pathStr.s));
+        frag = Str(frag.s + 1, frag.len - 1);
+    }
+    path = url::DecodeTemp(pathStr);
+    str::TransCharsInPlace(path, StrL("/"), StrL("\\"));
+    *pathOut = path;
+    if (fragmentOut) {
+        *fragmentOut = frag ? str::DupTemp(frag) : Str{};
+    }
+    return true;
+}
+
+// return true if we can load the file based on sniffing file type from content
+bool IsFileSupportedByContent(Str filePath) {
+    FileType kindSniffed = GuessFileType(filePath, true);
+    return IsSupportedFileType(kindSniffed, true);
+}
+
+// MuPDF encodes GoToR named destinations as "nameddest=<name>" in the link URI
+// fragment, but EngineBase::GetNamedDest prepends "#nameddest=" itself -- so the
+// prefix must be stripped or the lookup becomes "#nameddest=nameddest=<name>"
+// and fails, leaving the remote PDF on page 1 (issue #5642).
+// Strips mupdf's "nameddest=" prefix so the name can be passed to GetNamedDest.
+void CleanRemoteDestNameInPlace(Str& destName) {
+    str::TrimPrefixI(destName, StrL("nameddest="));
+}
+
+// normalizes case and whitespace in the string
+TempStr NormalizeFuzzyTemp(Str str) {
+    TempStr dup = str::DupTemp(str);
+    str::ToLowerInPlace(dup);
+    str::NormalizeWSInPlace(dup);
+    // cf. AddTocItemToView
+    return dup;
+}
+
+bool MatchFuzzy(Str s1, Str s2, bool partially) {
+    if (!partially) {
+        return str::Eq(s1, s2);
+    }
+
+    // only match at the start of a word (at the beginning and after a space)
+    Str rest = s1;
+    while (len(rest) > 0) {
+        int idx = str::IndexOf(rest, s2);
+        if (idx < 0) {
+            break;
+        }
+        const char* found = rest.s + idx;
+        if (found == s1.s || *(found - 1) == ' ') {
+            return true;
+        }
+        int off = idx + 1;
+        rest.s += off;
+        rest.len -= off;
+    }
+    return false;
+}
+
+bool HasOpenedDocuments(MainWindow* win) {
+    for (WindowTab* t : win->Tabs()) {
+        if (!t->IsAboutTab()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+BuildMenuCtx* NewBuildMenuCtx(WindowTab* tab, Point pt) {
+    auto* ctx = new AppCommandCtx;
+    if (tab && tab->win) {
+        *ctx = NewAppCommandCtx(tab->win, pt);
+    } else if (tab) {
+        ctx->tab = tab;
+    }
+    return ctx;
+}
+
+void DeleteBuildMenuCtx(BuildMenuCtx* ctx) {
+    delete ctx;
+}
+
+// True if `win` is still in gWindows (the object has not been deleted).
+// Does not look at isBeingClosed: CloseWindow sets that flag first and then
+// pumps messages (save-annotations dialog, ShowWindow), using this to detect
+// whether the window was destroyed during that pumping. Folding isBeingClosed
+// in here would make CloseWindow abort immediately after setting the flag.
+bool IsMainWindowValid(MainWindow* win) {
+    return win && VecContains(gWindows, win);
+}
+
+// True if `win` still exists and CloseWindow has not started. Use this for
+// deferred work (load finish, timers, find/print threads, UI updates) that
+// must not touch a window that is tearing down.
+bool IsMainWindowValidAndNotClosing(MainWindow* win) {
+    return IsMainWindowValid(win) && !win->isBeingClosed;
+}
+
+// false for a null window or tab, so deferred work can test both at once
+bool IsCurrentTab(MainWindow* win, WindowTab* tab) {
+    return win && tab && win->CurrentTab() == tab;
+}
+
+bool IsWindowTabValid(WindowTab* tab) {
+    return FindMainWindowByTab(tab) != nullptr;
+}
+
+// A posted task runs after the window or tab may have been closed and freed.
+// These post fn(ptr) and drop it if ptr is gone by then, so the task never
+// sees a dangling pointer.
+struct PostedForPtr {
+    void* ptr = nullptr;
+    void (*fn)(void*) = nullptr;
+};
+
+static void RunPostedForWindow(PostedForPtr* d) {
+    if (IsMainWindowValid((MainWindow*)d->ptr)) {
+        d->fn(d->ptr);
+    }
+    delete d;
+}
+
+static void RunPostedForTab(PostedForPtr* d) {
+    if (IsWindowTabValid((WindowTab*)d->ptr)) {
+        d->fn(d->ptr);
+    }
+    delete d;
+}
+
+void PostForWindow(MainWindow* win, void (*fn)(MainWindow*), Kind kind) {
+    auto d = new PostedForPtr{win, (void (*)(void*))fn};
+    uitask::Post(MkFunc0(RunPostedForWindow, d), kind);
+}
+
+void PostForTab(WindowTab* tab, void (*fn)(WindowTab*), Kind kind) {
+    auto d = new PostedForPtr{tab, (void (*)(void*))fn};
+    uitask::Post(MkFunc0(RunPostedForTab, d), kind);
+}
+
+void LinkHandler::GoToPage(int pageNo, bool addNavPoint) {
+    ReportIf(!win || !win->ctrl || win->linkHandler != this);
+    if (!win || !win->ctrl || !win->IsDocLoaded()) {
+        return;
+    }
+    win->ctrl->GoToPage(pageNo, addNavPoint);
+}
+
+bool LinkHandler::GoToNextPage() {
+    ReportIf(!win || !win->ctrl || win->linkHandler != this);
+    if (!win || !win->ctrl || !win->IsDocLoaded()) {
+        return false;
+    }
+    return win->ctrl->GoToNextPage();
+}
+
+bool LinkHandler::GoToPrevPage(bool toBottom) {
+    ReportIf(!win || !win->ctrl || win->linkHandler != this);
+    if (!win || !win->ctrl || !win->IsDocLoaded()) {
+        return false;
+    }
+    return win->ctrl->GoToPrevPage(toBottom);
+}
+
+void LinkHandler::ScrollTo(int pageNo, RectF rect, float zoom) {
+    ReportIf(!win || !win->ctrl || win->linkHandler != this);
+    if (!win || !win->ctrl || !win->IsDocLoaded()) {
+        return;
+    }
+    win->ctrl->ScrollTo(pageNo, rect, zoom);
+    ShowLinkDestHighlight(win, pageNo, rect);
+}
+
+void LinkHandler::LaunchURL(Str uri) {
+    if (len(uri) == 0) {
+        /* ignore missing URLs */;
+        return;
+    }
+
+    TempStr path = str::DupTemp(uri);
+    int colon = str::IndexOfChar(path, ':');
+    int hash = str::IndexOfChar(path, '#');
+    if (colon < 0 || (hash >= 0 && colon > hash)) {
+        // treat relative URIs as file paths (without fragment identifier)
+        if (hash >= 0) {
+            path.len = hash;
+        }
+        str::TransCharsInPlace(path, StrL("/"), StrL("\\"));
+        path = url::DecodeTemp(path);
+        // LaunchFile will reject unsupported file types
+        this->LaunchFile(path, nullptr);
+        return;
+    }
+
+    // file://... → open as a local document (or explorer if unsupported)
+    TempStr filePath;
+    Str fragment;
+    if (PathFromFileUriTemp(uri, &filePath, &fragment)) {
+        if (len(fragment) > 0) {
+            // Carry destination name for LaunchFile scroll-to (named dest / page)
+            PageDestinationFile dest(filePath, fragment);
+            this->LaunchFile(filePath, &dest);
+        } else {
+            this->LaunchFile(filePath, nullptr);
+        }
+        return;
+    }
+
+    // LaunchBrowser will reject unsupported URI schemes
+    SumatraLaunchBrowser(path);
+}
+
+// finds the first ToC entry that (partially) matches a given normalized name
+// (ignoring case and whitespace differences)
+TocItem* LinkHandler::FindTocItem(TocItem* item, Str name, bool partially) {
+    for (; item; item = item->next) {
+        if (item->title) {
+            TempStr fuzTitle = NormalizeFuzzyTemp(item->title);
+            if (MatchFuzzy(fuzTitle, name, partially)) {
+                return item;
+            }
+        }
+        TocItem* found = FindTocItem(item->child, name, partially);
+        if (found) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+void MainWindow::ToggleZoom() const {
+    WindowTab* tab = CurrentTab();
+    if (tab) {
+        tab->ToggleZoom();
+    }
+}
+
+void LinkHandler::ScrollTo(IPageDestination* dest) {
+    ReportIf(!win || !win->ctrl || win->linkHandler != this);
+    if (!dest || !win || !win->ctrl || !win->IsDocLoaded()) {
+        return;
+    }
+    // TODO: this seems like a hack, there should be a better way
+    // https://github.com/sumatrapdfreader/sumatrapdf/issues/3499
+    BrowserDocController* browser = win->ctrl->AsBrowser();
+    if (browser) {
+        browser->HandleLink(dest, nullptr);
+        return;
+    }
+    Location loc = win->ctrl->ResolveDest(dest);
+    if (!loc.IsValid()) {
+        return;
+    }
+    int pageNo = win->ctrl->PageNoFromLocation(loc);
+    if (!win->ctrl->ValidPageNo(pageNo)) {
+        return;
+    }
+    RectF rect = dest->GetRect();
+    float zoom = dest->GetZoom();
+    ScrollTo(pageNo, rect, zoom);
+}
+
+// Find MainWindow using WindowTab. Different than WindowTab->win in that
+// it validates that WindowTab is still valid
+MainWindow* FindMainWindowByTab(WindowTab* tabToFind) {
+    if (!tabToFind) {
+        return nullptr;
+    }
+    for (MainWindow* win : gWindows) {
+        for (WindowTab* tab : win->Tabs()) {
+            if (tab == tabToFind) {
+                return win;
+            }
+        }
+    }
+    return nullptr;
+}
+
+bool IsRightDragging(MainWindow* win) {
+    if (win->mouseAction != MouseAction::Dragging) {
+        return false;
+    }
+    return win->dragRightClick;
+}
+
+void LinkHandler::GotoNamedDest(Str name) {
+    ReportIf(!win || win->linkHandler != this);
+    DocController* ctrl = win->ctrl;
+    if (!ctrl) {
+        return;
+    }
+
+    // Match order:
+    // 1. Exact match on internal destination name
+    // 2. Fuzzy match on full ToC item title
+    // 3. Fuzzy match on a part of a ToC item title
+    // 4. Exact match on page label
+    IPageDestination* dest = ctrl->GetNamedDest(name);
+    bool hasDest = dest != nullptr;
+    if (dest) {
+        ScrollTo(dest);
+    } else if (ctrl->HasToc()) {
+        auto* docTree = ctrl->GetToc();
+        TocItem* root = docTree->root;
+        TempStr fuzName = NormalizeFuzzyTemp(name);
+        TocItem* tocItem = FindTocItem(root, fuzName, false);
+        if (!tocItem) {
+            tocItem = FindTocItem(root, fuzName, true);
+        }
+        if (tocItem) {
+            dest = tocItem->dest;
+            if (dest) {
+                ScrollTo(dest);
+                hasDest = true;
+            } else if (tocItem->pageNo > 0) {
+                ctrl->GoToPage(tocItem->pageNo, true);
+                hasDest = true;
+            }
+            if (hasDest) {
+                SelectTocItemInTree(win, tocItem);
+            }
+        }
+    }
+    if (!hasDest && ctrl->HasPageLabels()) {
+        int pageNo = ctrl->GetPageByLabel(name);
+        if (ctrl->ValidPageNo(pageNo)) {
+            ctrl->GoToPage(pageNo, true);
+        }
+    }
+}
+
+void PopulateTabCloseFlags(AppCommandCtx& ctx) {
+    if (!ctx.win) {
+        return;
+    }
+
+    int nTabs = ctx.win->TabCount();
+    ctx.nTabs = nTabs;
+    SetTabCloseFlags(ctx);
+}
+
+AppCommandCtx NewAppCommandCtx(MainWindow* win, Point cursorPos) {
+    AppCommandCtx ctx;
+    ctx.win = win;
+    ctx.cursorPos = cursorPos;
+    if (!win) {
+        return ctx;
+    }
+
+    ctx.tab = win->CurrentTab();
+    ctx.isDocLoaded = win->IsDocLoaded();
+    ctx.filePath = ctx.tab ? ctx.tab->filePath : Str();
+    ctx.isHexTab = ctx.tab && ctx.tab->IsHexTab();
+    ctx.hasOpenDocuments = HasOpenedDocuments(win);
+    ctx.debugDpiOverrideAvailable = true;
+
+    if (ctx.tab) {
+        ctx.autoScrollOn = ctx.tab->autoScroll.on;
+        ctx.readingBarOn = ctx.tab->readingBar.on;
+        ctx.isChm = ctx.tab->AsBrowser();
+        Str currentPath = win->ctrl ? win->ctrl->GetFilePath() : ctx.filePath;
+        ctx.isMarkdown = str::EndsWithI(currentPath, StrL(".md")) || str::EndsWithI(currentPath, StrL(".markdown"));
+        EngineBase* engine = ctx.tab->GetEngine();
+        ctx.isCbx = engine && engine->kind == kindEngineComicBooks;
+        ctx.isImageCollection = engine && engine->isImageCollection;
+        ctx.isEpub = IsEpubDoc(ctx.tab);
+        ctx.isReflowable = engine && engine->isReflowable;
+        ctx.engineKind = ctx.tab->GetEngineType();
+        ctx.engineHasErrors = engine && engine->HasErrors();
+#ifndef DISABLE_DOCUMENT_RESTRICTIONS
+        ctx.allowsPrinting = !win->AsFixed() || (engine && engine->AllowsPrinting());
+#endif
+        ctx.isPdf = IsPdfDoc(ctx.tab);
+        if (ctx.isPdf && engine) {
+            ctx.isPdfEncrypted = EngineMupdfIsEncrypted(engine);
+        }
+        ctx.canContinueReadAloud = CanContinueReadAloud(ctx.tab);
+        ctx.hideAnnotations = ctx.tab->hideAnnotations;
+        ctx.selectedAnnotation = ctx.tab->selectedAnnotation;
+    }
+
+    ctx.isSpeaking = TtsIsSpeaking();
+    ctx.aiChatAvailable = IsAIChatAvailable();
+    ctx.aiChatSupported = IsAIChatSupportedForTab(ctx.tab);
+    ctx.grokInstalled = IsBackendInstalled(AIChatBackend::Grok);
+    ctx.claudeInstalled = IsBackendInstalled(AIChatBackend::Claude);
+    ctx.codexInstalled = IsBackendInstalled(AIChatBackend::Codex);
+    ctx.antiGravityInstalled = IsBackendInstalled(AIChatBackend::AntiGravity);
+    ctx.hasSelection = ctx.isDocLoaded && ctx.tab && win->showSelection && ctx.tab->selectionOnPage;
+    FillAppCommandCtx(ctx, win);
+
+    if (ctx.isDocLoaded && win->ctrl) {
+        ctx.isSinglePage = IsSingle(win->ctrl->GetDisplayMode());
+        ctx.pageCount = win->ctrl->PageCount();
+        ctx.hasToc = win->ctrl->HasToc();
+    }
+
+    DisplayModel* dm = win->AsFixed();
+    if (dm) {
+        ctx.isFixedPage = true;
+        EngineBase* engine = dm->GetEngine();
+        ctx.hasTextSelection = ctx.hasSelection && len(dm->textSelection->result) > 0;
+        ctx.hasDrawnRectSelection = ctx.hasSelection && IsDrawnRectSelection(win);
+        ctx.supportsAnnots = EngineSupportsAnnotations(engine);
+        ctx.hasUnsavedAnnotations = EngineHasUnsavedAnnotations(engine);
+        ctx.hasTrimmedPages = !dm->GetUserCrop().IsEmpty() || dm->GetTrimEmptyMargins();
+        ctx.hasRedactMarks = EngineHasRedactMarksNoWait(engine);
+        ctx.hasUserRedactMarks = EngineHasUserRedactMarks(engine);
+        ctx.canUndo = EngineCanUndoRedo(engine, UndoDir::Undo, EngineWait::NoWait);
+        ctx.canRedo = EngineCanUndoRedo(engine, UndoDir::Redo, EngineWait::NoWait);
+        ctx.isCursorOnPage = dm->GetPageNoByPoint(cursorPos) > 0;
+        ctx.annotationUnderCursor = AnnotationUnderCursor(win, dm, cursorPos);
+        IPageElement* pageEl = dm->GetElementAtPos(cursorPos, nullptr);
+        if (pageEl) {
+            Str value = pageEl->GetValue();
+            ctx.cursorOnLinkTarget = pageEl->Is(kindPageElementDest) && PageDestHasAddress(pageEl->AsLink());
+            ctx.cursorOnComment = value && pageEl->Is(kindPageElementComment);
+            ctx.cursorOnImage = pageEl->Is(kindPageElementImage);
+        }
+        if (ctx.annotationUnderCursor) {
+            ctx.cursorOnComment = !str::IsEmptyOrWhiteSpace(Contents(ctx.annotationUnderCursor));
+        }
+    }
+
+    if (!CanAccessDisk()) {
+        ctx.supportsAnnots = false;
+        ctx.hasUnsavedAnnotations = false;
+    }
+
+    PopulateTabCloseFlags(ctx);
+    return ctx;
+}

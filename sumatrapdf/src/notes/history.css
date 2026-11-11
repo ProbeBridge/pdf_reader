@@ -1,0 +1,194 @@
+@import url("notes.css");
+:root {
+  background: #f8f9fa;
+  font-size: 14px;
+}
+header {
+  gap: 22px;
+  padding: 18px 28px;
+  border-bottom: 1px solid #dadce0;
+}
+.brand {
+  font-size: 20px;
+  white-space: nowrap;
+}
+.brand b {
+  color: #a65300;
+  font-size: 13px;
+}
+.search {
+  display: flex;
+  flex: 1;
+  max-width: 720px;
+  align-items: center;
+  padding: 4px 12px;
+  gap: 10px;
+  background: #f1f3f4;
+  border-radius: 7px;
+  margin: 0;
+}
+.search span {
+  font-size: 28px;
+}
+.search input {
+  flex: 1;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: none;
+  padding: 6px;
+}
+.search input:not([type="checkbox"]) {
+  background: transparent;
+  border: 0;
+}
+kbd {
+  white-space: nowrap;
+  color: #666;
+  font-size: 11px;
+}
+header button {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.layout {
+  display: flex;
+}
+aside {
+  padding: 30px 22px;
+  width: 245px;
+  flex-shrink: 0;
+}
+h1 {
+  font-size: 24px;
+  margin: 0 0 5px;
+}
+aside p {
+  font-size: 12px;
+  color: #666;
+}
+.selected {
+  background: #f5e3ba;
+  border: 1px solid #c09647;
+  border-radius: 0 24px 24px 0;
+  padding: 9px 15px;
+  margin: 27px 0 30px -22px;
+  font-weight: 600;
+}
+.aside-hint {
+  line-height: 1.9;
+}
+main {
+  width: min(920px, 100%);
+  padding: 25px 30px 60px;
+}
+.heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+h2 {
+  margin: 0;
+  font-size: 20px;
+}
+#count {
+  color: #555;
+}
+.group {
+  background: white;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  margin: 0 0 22px;
+  overflow: hidden;
+}
+.group h3 {
+  margin: 0;
+  font-size: 15px;
+  padding: 14px 20px;
+  border-bottom: 1px solid #e8eaed;
+}
+.row {
+  display: flex;
+  gap: 17px;
+  align-items: center;
+  padding: 12px 18px;
+  border-bottom: 1px solid #eee;
+}
+.row:last-child {
+  border-bottom: 0;
+}
+.row:hover {
+  background: #fffaf0;
+}
+.time {
+  color: #666;
+  min-width: 42px;
+  font-size: 12px;
+}
+.file-icon {
+  width: 30px;
+  height: 34px;
+  border: 1px solid #a65300;
+  border-radius: 3px;
+  color: #a65300;
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.file {
+  flex: 1;
+  min-width: 0;
+}
+.file button {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  max-width: 100%;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  font-weight: 500;
+}
+.path {
+  display: block;
+  color: #666;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.remove {
+  border: 0;
+  background: none;
+  font-size: 21px;
+  padding: 0 5px;
+}
+#empty {
+  padding: 70px 20px;
+  text-align: center;
+  color: #555;
+}
+@media (max-width: 760px) {
+  aside {
+    display: none;
+  }
+  main {
+    padding: 20px 14px;
+  }
+  header {
+    padding: 12px;
+    gap: 10px;
+  }
+  .brand {
+    font-size: 15px;
+  }
+  kbd {
+    display: none;
+  }
+  header button {
+    padding: 4px;
+  }
+}

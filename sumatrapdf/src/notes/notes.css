@@ -1,0 +1,341 @@
+:root {
+  font:
+    15px/1.6 "Segoe UI",
+    "Microsoft YaHei",
+    sans-serif;
+  color: #111;
+  background: white;
+  --scale: 1;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  background: white;
+  border: 1px solid #888;
+  border-radius: 4px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+button:hover,
+button:focus-visible {
+  background: #fff2c6;
+  border-color: #222;
+}
+button:disabled {
+  cursor: default;
+  color: #666;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 2px solid #222;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: white;
+  gap: 5px;
+}
+nav {
+  display: flex;
+  gap: 4px;
+}
+nav button {
+  padding: 2px 6px;
+}
+.doc-title {
+  padding: 7px 12px;
+  border-bottom: 1px solid #aaa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+#cards {
+  font-size: calc(15px * var(--scale));
+  padding: 20px 12px 90px;
+  overflow-wrap: anywhere;
+}
+.card {
+  position: relative;
+  border-bottom: 1px solid #aaa;
+  padding: 20px 0;
+  scroll-margin-top: 100px;
+}
+.card-head.sentence .meaning {
+  flex-basis: 100%;
+}
+.card > .tools {
+  position: absolute;
+  top: -19px;
+  left: 0;
+  z-index: 2;
+  visibility: hidden;
+  background: white;
+  border: 1px solid #777;
+  border-radius: 4px;
+  padding: 2px;
+  margin: 0;
+  gap: 3px;
+}
+.card:hover > .tools,
+.card:focus-within > .tools {
+  visibility: visible;
+}
+.card > .tools button {
+  height: 30px;
+  min-width: 30px;
+  border: 0;
+  padding: 3px 5px;
+  font-size: 11px;
+}
+.card > .tools button.icon {
+  display: grid;
+  place-items: center;
+}
+.card > .tools button.icon svg {
+  width: 22px;
+  height: 22px;
+}
+.card > .tools button.page {
+  font-size: 11px;
+}
+@media (max-width: 340px) {
+  .card > .tools {
+    gap: 1px;
+    flex-wrap: nowrap;
+  }
+  .card > .tools button {
+    min-width: 26px;
+    padding: 2px;
+  }
+  .card > .tools button.page {
+    font-size: 10px;
+  }
+  .card > .tools button.icon svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+.detail summary {
+  display: none;
+}
+.card > .model {
+  display: none;
+}
+@media (hover: none) {
+  .card > .tools {
+    position: static;
+    visibility: visible;
+    border: 0;
+    padding: 6px 0;
+  }
+}
+.card.active {
+  border-left: 3px solid #a65300;
+  padding-left: 9px;
+}
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.quote {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-weight: 700;
+  font-size: 1em;
+  text-align: left;
+}
+.ipa {
+  font-size: 0.9em;
+}
+.card-head .inline-speak {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  width: 1.3em;
+  height: 1.3em;
+  border: 0;
+  background: transparent;
+}
+.card-head .inline-speak svg {
+  width: 1.15em;
+  height: 1.15em;
+}
+.meaning {
+  font-weight: 500;
+}
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 7px 0;
+}
+.tools button {
+  font-size: 0.78em;
+  padding: 1px 6px;
+}
+.tools .page {
+  margin-left: auto;
+}
+.model,
+.muted {
+  font-size: 12px;
+  color: #555;
+}
+.model {
+  display: block;
+  margin-top: 6px;
+}
+.detail {
+  font-size: 0.95em;
+}
+.detail p,
+.answer p {
+  margin: 8px 0;
+}
+.detail summary {
+  cursor: pointer;
+}
+.ask-box {
+  margin: 9px 0;
+}
+.ask-box textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 58px;
+  padding: 6px;
+  border: 1px solid #555;
+}
+.ask-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: end;
+  margin: 5px 0;
+}
+.turn {
+  border-left: 2px solid #888;
+  padding-left: 10px;
+  margin: 12px 0;
+}
+.question {
+  font-weight: 600;
+  white-space: pre-wrap;
+}
+.error {
+  color: #8d170d;
+  white-space: pre-wrap;
+}
+.pending {
+  font-size: 0.9em;
+}
+.empty {
+  margin: 18vh auto 0;
+  padding: 0 25px;
+  max-width: 420px;
+}
+.empty p {
+  color: #444;
+  font-size: 14px;
+}
+#status {
+  padding: 7px 12px;
+  font-size: 12px;
+  border-top: 1px solid #aaa;
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+  background: white;
+}
+#toast {
+  position: fixed;
+  bottom: 36px;
+  margin: 10px;
+  left: 0;
+  right: 0;
+  padding: 10px;
+  background: #fff3d1;
+  border: 1px solid #222;
+  z-index: 20;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+[hidden] {
+  display: none !important;
+}
+dialog {
+  padding: 18px;
+  width: min(95vw, 600px);
+  max-height: 94vh;
+  overflow-y: auto;
+  border: 2px solid #333;
+  border-radius: 6px;
+}
+dialog::backdrop {
+  background: #0006;
+}
+h2 {
+  font-size: 19px;
+  margin: 0 0 14px;
+}
+label {
+  display: block;
+  font-size: 13px;
+  margin: 9px 0;
+}
+label input:not([type="checkbox"]),
+label textarea,
+label select {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  border: 1px solid #888;
+  background: white;
+  border-radius: 3px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+#test-result {
+  display: block;
+  margin-top: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+ul,
+ol {
+  padding-left: 22px;
+}
+code {
+  font-size: 0.9em;
+  border: 1px solid #aaa;
+  padding: 0 3px;
+}

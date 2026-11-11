@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 注释</title>
+    <link rel="stylesheet" href="notes.css" />
+  </head>
+  <body>
+    <header>
+      <strong id="brand">AI 注释</strong>
+      <nav>
+        <button id="smaller" title="缩小">A−</button><button id="zoom">100%</button
+        ><button id="larger" title="放大">A+</button><button id="settings" title="设置">⚙</button
+        ><button id="close" title="关闭">×</button>
+      </nav>
+    </header>
+    <div id="doc-title" class="doc-title"></div>
+    <main id="cards" aria-live="polite"></main>
+    <div id="empty" class="empty">
+      <strong>让生词留在上下文里</strong>
+      <p>单击英文单词，或选中文字后点击「AI 注释」。</p>
+      <p>Alt + Shift + A · 生成注释<br />Ctrl + Shift + A · 打开侧栏</p>
+      <button id="setup">配置 AI 接口</button>
+    </div>
+    <footer id="status"></footer>
+    <dialog id="settings-dialog">
+      <form id="settings-form">
+        <h2>AI 设置</h2>
+        <label
+          >接口<select name="provider">
+            <option value="gemini">Google Gemini</option>
+            <option value="anthropic">Anthropic Claude</option>
+            <option value="openai">OpenAI 兼容接口</option>
+          </select></label
+        ><label>API Key<input name="apiKey" type="password" autocomplete="off" placeholder="API Key / curl" /></label
+        ><label>接口地址<input name="baseUrl" type="url" placeholder="默认接口地址" /></label
+        ><label>模型<input name="model" list="models" required /><datalist id="models"></datalist></label
+        ><label
+          >思考深度<select name="effort">
+            <option>low</option>
+            <option>medium</option>
+            <option>high</option>
+            <option>default</option>
+          </select></label
+        ><label
+          >音标<select name="ipa">
+            <option value="us">美式</option>
+            <option value="uk">英式</option>
+            <option value="off">关闭</option>
+          </select></label
+        ><label class="check"><input name="clickToAnnotate" type="checkbox" />单击英文单词生成注释</label
+        ><label>注释提示词<textarea name="systemPrompt" rows="4"></textarea></label
+        ><label>追问提示词<textarea name="followupPrompt" rows="3"></textarea></label>
+        <p class="muted">设置与注释仅保存在本机。生成时只向所配置的接口发送选中文本及上下文。</p>
+        <div class="form-actions">
+          <button type="button" id="test">测试连接</button><button type="submit">保存</button
+          ><button type="button" id="cancel-settings">取消</button>
+        </div>
+        <output id="test-result"></output>
+        <hr />
+        <div class="form-actions">
+          <button type="button" id="export">导出注释</button><button type="button" id="import">导入注释</button
+          ><button type="button" id="clear">清空注释</button
+          ><input type="file" id="import-file" accept="application/json,.json" hidden />
+        </div>
+      </form>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+    <script type="module" src="notes.js"></script>
+  </body>
+</html>

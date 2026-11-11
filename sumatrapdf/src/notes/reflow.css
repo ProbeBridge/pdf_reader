@@ -1,0 +1,182 @@
+:root {
+  color-scheme: light dark;
+  --font-scale: 1;
+}
+* {
+  box-sizing: border-box;
+}
+html {
+  overflow-x: hidden;
+  scroll-behavior: auto;
+}
+body {
+  margin: 0;
+  font:
+    16px/1.7 system-ui,
+    "Microsoft YaHei",
+    sans-serif;
+  background: Canvas;
+  color: CanvasText;
+  overflow-wrap: anywhere;
+}
+nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px;
+  background: Canvas;
+  border-bottom: 1px solid GrayText;
+  font-size: 12px;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: ButtonFace;
+  border: 1px solid GrayText;
+  border-radius: 5px;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.spacer {
+  flex: 1;
+}
+#status {
+  margin: 10px 20px;
+  font-size: 13px;
+}
+#status:empty {
+  display: none;
+}
+main {
+  width: 100%;
+  min-width: 0;
+  padding: 0 clamp(12px, 3vw, 40px);
+  font-size: calc(18px * var(--font-scale));
+}
+.source-page {
+  width: 100%;
+  min-width: 0;
+  min-height: 160px;
+  scroll-margin-top: 48px;
+  padding: 22px 0 30px;
+  border-bottom: 1px solid GrayText;
+}
+.page-number {
+  display: block;
+  font:
+    12px/1.5 system-ui,
+    sans-serif;
+  color: GrayText;
+  margin-bottom: 16px;
+}
+.source-page:last-child {
+  min-height: calc(100vh - 48px);
+}
+.page-content {
+  position: relative;
+  isolation: isolate;
+}
+.page-content,
+.page-content * {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.page-content p {
+  margin: 0.5em 0 1em;
+}
+.page-content h1 {
+  font-size: 1.5em;
+}
+.page-content h2 {
+  font-size: 1.3em;
+}
+.page-content h3 {
+  font-size: 1.15em;
+}
+.page-content img {
+  display: block;
+  width: min(calc(var(--image-width, 100%) * var(--font-scale)), 100%);
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  margin: 0.8em auto;
+}
+.page-content table {
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 0.95em;
+}
+.page-content th,
+.page-content td {
+  border: 1px solid GrayText;
+  padding: 0.35em 0.5em;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.page-content table p {
+  margin: 0;
+}
+.page-content table h1,
+.page-content table h2,
+.page-content table h3,
+.page-content table h4,
+.page-content table h5,
+.page-content table h6 {
+  font-size: 1em;
+  margin: 0;
+}
+.page-content pre,
+.page-content code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.page-content ul,
+.page-content ol {
+  padding-inline-start: 1.5em;
+}
+.note-ink-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+.note-ink {
+  position: absolute;
+  display: block;
+  background: #ffdb70;
+  border-bottom: 1px solid #995400;
+  padding: 0;
+}
+#note-actions {
+  position: fixed;
+  z-index: 3;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border: 1px solid GrayText;
+  border-radius: 6px;
+  background: Canvas;
+  font-size: 12px;
+  box-shadow: 0 2px 10px #0003;
+}
+#note-actions[hidden] {
+  display: none;
+}
+#note-ipa {
+  display: inline-block;
+  padding-inline: 4px;
+}

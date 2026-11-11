@@ -1,0 +1,42 @@
+# Our additions to mupdf
+
+Files here and in `src/shared/mupdf` are ours, not mupdf's: they are compiled into the `mupdf` project
+(`mupdf_files()` in `premake5.files.lua`, the `mupdf` lib in
+`cmd/deps-build-defs.ts` for ninja) but live outside the vendored `ext/mupdf`
+tree so that they are not mistaken for upstream code and do not need an
+`ext/patches/` entry. Both directories are on the `mupdf` project's include path,
+so the tools we patch inside `ext/mupdf` include them by bare name
+(`#include "pkcs7-windows.h"`); our own code under `src/` uses
+`#include "mupdf/pkcs7-windows.h"`.
+
+- `mupdf_load_system_font.c` — loads the fonts installed in Windows for mupdf's
+  font fallback, plus the plain-malloc harfbuzz allocator wrappers
+- `noto_sumatra.[ch]` — compiled instead of mupdf's `noto.c`: the built-in fonts
+  are not linked into the binary but fetched by file name through
+  `fz_set_builtin_font_loader()`. SumatraPDF tries the `fonts\` entries of
+  `IDR_EMBEDDED_PAK` (staged by `cmd/pack-embedded-prebuild.cmd`; wasm and
+  `SUMATRA_NO_EMBED_FONTS=1` leave them out), then a cache directory, then the
+  URL in `fonts_map.c` (`bun cmd/upload-fonts.ts`)
+- `pkcs7-windows.[ch]` — PDF signature verification and signing on the Win32
+  CryptoAPI instead of OpenSSL (patch `0003` makes mupdf's `pdfsign` / `murun`
+  call it)
+
+- `load-jxl.cpp` / `load-jxl.h` - JPEG XL metadata and pixel decoding through
+  jxldec for MuPDF images and PDF `/JXLDecode` streams
+- `zxing-eci.cpp` (in `src/shared/mupdf`) - builds zxing-cpp's `ECI.cpp` under a
+  name that does not collide with zint's `eci.c` in the `zxing` lib (mupdf's
+  `eci_dedup.cpp`)
+
+_Changes_ to mupdf itself still go into `ext/mupdf` in place and get recorded as
+a patch in `ext/patches/` (see its README). Put code here only when it is
+entirely ours: a whole new file that mupdf's build does not know about. Shared
+additions live in `src/shared/mupdf`.
+
+## OFD
+
+`src/shared/mupdf/ofd.c` is a MuPDF document handler for OFD (GB/T 33190),
+registered by `EngineMupdf`. It builds a display list per page; a package's
+documents are one page sequence. `ofd-seal.c` reads and checks SES / GB/T 35275
+signatures and certificate chains with the SM2 / SM3 / SM4 code in
+`ofd-crypto.c`; `ofd-decrypt.c` opens password-encrypted packages. Tests: `tests/issue-1909.ts`; sample corpus:
+`tests/ad-hoc-ofd-corpus.ts`.

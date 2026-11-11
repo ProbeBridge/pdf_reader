@@ -1,0 +1,593 @@
+{
+  "extName": {
+    "message": "陪读注释"
+  },
+  "extDescription": {
+    "message": "选中网页文字，连同所在段落交给大模型生成注释，显示在侧边栏；高亮与卡片双向联动，下次打开自动找回原位置。"
+  },
+  "actionTitle": {
+    "message": "打开陪读注释侧边栏"
+  },
+  "cmdAnnotate": {
+    "message": "为选中的文字生成注释"
+  },
+  "menuAnnotate": {
+    "message": "生成注释：“%s”"
+  },
+  "errOpenPdfFirst": {
+    "message": "请先打开一个在线或本地 PDF 文档。"
+  },
+  "errPdfPage": {
+    "message": "无法识别 PDF 阅读页面。"
+  },
+  "errEmptyQuestion": {
+    "message": "问题是空的"
+  },
+  "errNoteGone": {
+    "message": "这条注释已经不存在了"
+  },
+  "errWaitNote": {
+    "message": "等注释生成完再追问"
+  },
+  "errAskBusy": {
+    "message": "上一个追问还在回答中"
+  },
+  "errNothingToRestore": {
+    "message": "没有可恢复的注释"
+  },
+  "selectFirst": {
+    "message": "先选中网页上的一段文字"
+  },
+  "noTextSelected": {
+    "message": "选中的内容里没有文字"
+  },
+  "selectionTooLong": {
+    "message": "选中内容太长（上限 $1 字）"
+  },
+  "saveFailed": {
+    "message": "保存失败：$1"
+  },
+  "noResponse": {
+    "message": "扩展没有响应"
+  },
+  "noResponsePdf": {
+    "message": "扩展没有响应，请重新加载扩展和文档。"
+  },
+  "floatTitle": {
+    "message": "用大模型解释选中的文字（Alt+Shift+A）"
+  },
+  "floatLabel": {
+    "message": "注释"
+  },
+  "deleteNote": {
+    "message": "删除这条注释"
+  },
+  "undo": {
+    "message": "撤销"
+  },
+  "deleteFailed": {
+    "message": "删除失败，请再试一次"
+  },
+  "noteDeleted": {
+    "message": "已删除这条注释"
+  },
+  "restoreFailed": {
+    "message": "没能恢复这条注释"
+  },
+  "staleReload": {
+    "message": "注释插件已更新，请刷新页面后再用"
+  },
+  "errNoKey": {
+    "message": "还没有设置 API Key，请在设置页填写。"
+  },
+  "errNoModel": {
+    "message": "还没有设置模型名称，请在设置页填写。"
+  },
+  "errApi": {
+    "message": "接口返回错误：$1"
+  },
+  "refusalCategory": {
+    "message": "（类别：$1）"
+  },
+  "errRefused": {
+    "message": "模型拒绝了这个请求$1。可以换个模型或调整选中内容后重试。"
+  },
+  "truncated": {
+    "message": "（输出达到长度上限，被截断）"
+  },
+  "errNoText": {
+    "message": "模型没有返回文字（$1）。"
+  },
+  "unknown": {
+    "message": "未知"
+  },
+  "modelFellBack": {
+    "message": "$1（已自动回退）"
+  },
+  "errAllModels": {
+    "message": "所有候选模型都暂时不可用：\n$1"
+  },
+  "slowerThan": {
+    "message": "比 $1 慢，暂时跳过"
+  },
+  "modelSwapped": {
+    "message": "$1（$2 不可用，已自动换用）"
+  },
+  "noResponseIn": {
+    "message": "$1 秒内没有响应"
+  },
+  "errNetwork": {
+    "message": "网络请求失败：$1"
+  },
+  "errConnLost": {
+    "message": "连接中断：$1"
+  },
+  "errGeminiBlocked": {
+    "message": "请求被 Gemini 安全策略拦截（$1）。"
+  },
+  "errGeminiEmpty": {
+    "message": "Gemini 没有生成内容（finishReason: $1）。"
+  },
+  "errNetworkHint": {
+    "message": "网络请求失败：$1（检查网络/代理，或 Base URL 是否正确）"
+  },
+  "httpError": {
+    "message": "HTTP $1：$2"
+  },
+  "http401": {
+    "message": "（API Key 无效）"
+  },
+  "http403": {
+    "message": "（无权限）"
+  },
+  "http404": {
+    "message": "（地址或模型名不对）"
+  },
+  "http429": {
+    "message": "（触发限流，请稍后再试）"
+  },
+  "zoomGroup": {
+    "message": "侧边栏缩放"
+  },
+  "zoomOut": {
+    "message": "缩小"
+  },
+  "zoomIn": {
+    "message": "放大"
+  },
+  "zoomReset": {
+    "message": "恢复默认大小"
+  },
+  "settings": {
+    "message": "设置"
+  },
+  "keyBanner": {
+    "message": "还没有设置 API Key，注释无法生成。"
+  },
+  "goToSettings": {
+    "message": "去设置"
+  },
+  "pdfBanner": {
+    "message": "如果当前文档是 PDF，请切换到标注模式。"
+  },
+  "openPdfReader": {
+    "message": "打开 PDF 标注"
+  },
+  "emptyTitle": {
+    "message": "这个页面还没有注释"
+  },
+  "emptyStep1": {
+    "message": "单击英文单词，或选中网页或 PDF 上的短语、句子"
+  },
+  "emptyStep2": {
+    "message": "点出现的 <span class=\"kbd-chip\">注释</span> 按钮，或按 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>，或右键「生成注释」"
+  },
+  "emptyStep3": {
+    "message": "模型会结合整段上下文给出中文对应词，详细解释折叠在下面，卡片和原文对齐"
+  },
+  "unsupportedTitle": {
+    "message": "这个页面不能加注释"
+  },
+  "unsupportedWhy": {
+    "message": "浏览器内置页面和应用商店不能加注释。PDF 请使用本扩展的 PDF 标注模式。"
+  },
+  "unsupportedFile": {
+    "message": "本地文件需要在 chrome://extensions 里为本扩展打开「允许访问文件网址」。"
+  },
+  "explainTitle": {
+    "message": "让模型结合上下文再解释选中的这段注释"
+  },
+  "explainLabel": {
+    "message": "解释这段"
+  },
+  "explainAsk": {
+    "message": "请再解释一下你上面提到的「$1」"
+  },
+  "openSettings": {
+    "message": "打开设置"
+  },
+  "retry": {
+    "message": "重试"
+  },
+  "askQ": {
+    "message": "追问"
+  },
+  "confirmDeleteShort": {
+    "message": "删除？"
+  },
+  "deleteQuestion": {
+    "message": "删除这条追问"
+  },
+  "answering": {
+    "message": "正在回答…"
+  },
+  "answerInterrupted": {
+    "message": "回答被中断了（扩展可能重启过）。"
+  },
+  "answerFailed": {
+    "message": "回答失败"
+  },
+  "askPlaceholder": {
+    "message": "继续问，比如：换个更口语的译法？这里的 it 指什么？"
+  },
+  "send": {
+    "message": "发送"
+  },
+  "askBusyHint": {
+    "message": "等这条回答完再继续问"
+  },
+  "askKeysHint": {
+    "message": "Enter 发送 · Shift+Enter 换行 · Esc 收起"
+  },
+  "detailShow": {
+    "message": "展开详细解释"
+  },
+  "detailHide": {
+    "message": "收起详细解释"
+  },
+  "generatingSuffix": {
+    "message": "（生成中…）"
+  },
+  "locateTitle": {
+    "message": "定位到原文"
+  },
+  "ipaTitle": {
+    "message": "国际音标（按这段话里的读法）"
+  },
+  "orphan": {
+    "message": "原文在当前页面中没找到"
+  },
+  "generatingShort": {
+    "message": "生成中…"
+  },
+  "generatingNote": {
+    "message": "正在结合上下文生成注释…"
+  },
+  "genInterrupted": {
+    "message": "生成被中断了（扩展可能重启过）。"
+  },
+  "genFailed": {
+    "message": "生成失败"
+  },
+  "detailButton": {
+    "message": "详解"
+  },
+  "speak": {
+    "message": "朗读（美式发音）"
+  },
+  "ask": {
+    "message": "追问"
+  },
+  "askLocked": {
+    "message": "注释生成后才能追问"
+  },
+  "regenerate": {
+    "message": "重新生成"
+  },
+  "lastModel": {
+    "message": "（上次用的是 $1）"
+  },
+  "copyMd": {
+    "message": "复制（Markdown）"
+  },
+  "confirmDelete": {
+    "message": "确认删除"
+  },
+  "deleteTwice": {
+    "message": "删除（点两次）"
+  },
+  "delete": {
+    "message": "删除"
+  },
+  "pageNo": {
+    "message": "第 $1 页"
+  },
+  "gotoSource": {
+    "message": "跳到原文"
+  },
+  "mdDetail": {
+    "message": "详细解释"
+  },
+  "mdFollowup": {
+    "message": "追问："
+  },
+  "noteCountOne": {
+    "message": "1 条注释"
+  },
+  "noteCount": {
+    "message": "$1 条注释"
+  },
+  "zoomToast": {
+    "message": "侧边栏 $1%（$2 恢复）"
+  },
+  "zoomInTitle": {
+    "message": "放大（$1+ 或 $1 滚轮）"
+  },
+  "zoomOutTitle": {
+    "message": "缩小（$1−）"
+  },
+  "zoomResetTitle": {
+    "message": "恢复 100%（$1）"
+  },
+  "optionsTitle": {
+    "message": "陪读注释 · 设置"
+  },
+  "optionsLead": {
+    "message": "设置只保存在这台电脑的浏览器本地（chrome.storage.local），不会同步，也不会发给除你填写的接口以外的任何地方。"
+  },
+  "secApi": {
+    "message": "模型接口"
+  },
+  "provider": {
+    "message": "接口类型"
+  },
+  "providerGemini": {
+    "message": "Google Gemini（有免费额度）"
+  },
+  "providerAnthropic": {
+    "message": "Anthropic（Claude）"
+  },
+  "providerOpenai": {
+    "message": "OpenAI 兼容接口（DeepSeek、Kimi、通义、OpenRouter、本地模型等）"
+  },
+  "show": {
+    "message": "显示"
+  },
+  "hide": {
+    "message": "隐藏"
+  },
+  "optional": {
+    "message": "可留空"
+  },
+  "model": {
+    "message": "模型"
+  },
+  "effort": {
+    "message": "思考深度"
+  },
+  "effortLow": {
+    "message": "low：最快，适合日常查词和长句（推荐）"
+  },
+  "effortMedium": {
+    "message": "medium：更细致，适合反讽、典故密集的文章"
+  },
+  "effortHigh": {
+    "message": "high：最慢最贵"
+  },
+  "effortDefault": {
+    "message": "不发送，用模型默认值"
+  },
+  "secPrompts": {
+    "message": "提示词"
+  },
+  "notePrompt": {
+    "message": "注释提示词"
+  },
+  "notePromptSub": {
+    "message": "第一条注释：简短的中文对应词 + 折叠起来的详细解释"
+  },
+  "notePromptHint": {
+    "message": "请求会附带网页标题、网址、选中文字所在的整段原文（<paragraph>）和选中内容（<selection>）。输出格式（音标行、「【详解】」分隔行）会自动附加，不用写在这里。"
+  },
+  "resetDefault": {
+    "message": "恢复默认"
+  },
+  "followPrompt": {
+    "message": "追问提示词"
+  },
+  "followPromptSub": {
+    "message": "卡片上的追问和「解释这段」"
+  },
+  "followPromptHint": {
+    "message": "追问时模型能看到原文段落、第一条注释（含详细解释）和之前所有问答。"
+  },
+  "secIpa": {
+    "message": "音标"
+  },
+  "ipaLabel": {
+    "message": "国际音标（IPA）"
+  },
+  "ipaUs": {
+    "message": "美式发音"
+  },
+  "ipaUk": {
+    "message": "英式发音"
+  },
+  "ipaOff": {
+    "message": "不显示"
+  },
+  "ipaHint": {
+    "message": "选中 6 个词以内的单词、短语或人名时，模型会按它在这段话里的读法给出音标，显示在卡片里的生词后面；鼠标悬停在网页高亮上也能看到。之前生成的注释点「重新生成」即可补上音标。"
+  },
+  "secInteraction": {
+    "message": "网页里的交互"
+  },
+  "floatingButtonLabel": {
+    "message": "选中文字后，在旁边显示「注释」浮动按钮"
+  },
+  "clickToAnnotateLabel": {
+    "message": "单击正文里的英文单词即加注释；单击已注释的词跳到它的注释（双击、三击仍是选中文字）"
+  },
+  "shortcutHint": {
+    "message": "也可以用快捷键 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> 或右键菜单「生成注释」。修改快捷键："
+  },
+  "save": {
+    "message": "保存"
+  },
+  "testConnection": {
+    "message": "测试连接"
+  },
+  "secData": {
+    "message": "数据"
+  },
+  "counting": {
+    "message": "统计中…"
+  },
+  "exportAll": {
+    "message": "导出全部注释（JSON）"
+  },
+  "import": {
+    "message": "导入"
+  },
+  "clearAll": {
+    "message": "清空全部注释"
+  },
+  "baseHintGemini": {
+    "message": "留空即官方地址 https://generativelanguage.googleapis.com。浏览器走系统代理，国内需要代理开着。"
+  },
+  "baseHintAnthropic": {
+    "message": "留空即官方地址 https://api.anthropic.com。用中转/代理时填它的地址（不带 /v1/messages）。"
+  },
+  "baseHintOpenai": {
+    "message": "填到 /v1 为止，例如 https://api.deepseek.com/v1、https://openrouter.ai/api/v1、http://localhost:11434/v1。"
+  },
+  "keyPlaceholderGemini": {
+    "message": "粘贴 key，或直接粘贴 AI Studio 给的整条 curl 命令"
+  },
+  "modelHintGemini": {
+    "message": "auto（推荐）：自动从最新的 Flash 模型往下试，过载/限流/超时就换下一个，并在后台检测更好的模型是否恢复。填具体模型名时，它不可用也会自动换用其他模型。"
+  },
+  "modelHintAnthropic": {
+    "message": "claude-opus-5-5 质量最好；claude-sonnet-5-5 更快更便宜；claude-haiku-5-5 最便宜。"
+  },
+  "modelHintOpenai": {
+    "message": "填服务商文档里的模型名，例如 deepseek-chat。"
+  },
+  "saved": {
+    "message": "已保存"
+  },
+  "requesting": {
+    "message": "正在请求…"
+  },
+  "connOk": {
+    "message": "连接正常 · $1 回复：「$2」（设置还没保存的话，记得点保存）"
+  },
+  "stats": {
+    "message": "共 $1 个网页、$2 条注释。"
+  },
+  "errNoPages": {
+    "message": "文件里没有 pages 字段"
+  },
+  "imported": {
+    "message": "导入了 $1 条注释（已有的不会重复导入）"
+  },
+  "importFailed": {
+    "message": "导入失败：$1"
+  },
+  "confirmClear": {
+    "message": "再点一次确认清空"
+  },
+  "cleared": {
+    "message": "已清空"
+  },
+  "pdfTitle": {
+    "message": "PDF · 陪读注释"
+  },
+  "docTitle": {
+    "message": "$1 · 陪读注释"
+  },
+  "pdfDocument": {
+    "message": "PDF 文档"
+  },
+  "prevPage": {
+    "message": "上一页"
+  },
+  "nextPage": {
+    "message": "下一页"
+  },
+  "pagePrefix": {
+    "message": "第"
+  },
+  "pageSuffix": {
+    "message": "页"
+  },
+  "pageNumber": {
+    "message": "页码"
+  },
+  "pageAria": {
+    "message": "第 $1 页"
+  },
+  "fitWidth": {
+    "message": "适合宽度"
+  },
+  "rotateTitle": {
+    "message": "顺时针旋转 90 度并适合宽度"
+  },
+  "rotate": {
+    "message": "旋转"
+  },
+  "annotateSelection": {
+    "message": "注释选中文字"
+  },
+  "openPanel": {
+    "message": "注释侧边栏"
+  },
+  "openFile": {
+    "message": "打开文件"
+  },
+  "opening": {
+    "message": "正在打开 PDF…"
+  },
+  "nativeViewer": {
+    "message": "用浏览器阅读器打开"
+  },
+  "pdfOpenFailed": {
+    "message": "PDF 打开失败：$1。可以点击「打开文件」选择本地 PDF。"
+  },
+  "pageRenderFailed": {
+    "message": "此页显示失败：$1"
+  },
+  "noTextLayer": {
+    "message": "此页没有可选文字（扫描件需要 OCR）"
+  },
+  "samePage": {
+    "message": "请在同一页内选中文字；可以跨行选择。"
+  },
+  "selectPdfFirst": {
+    "message": "先选中 PDF 里的单词、短语或句子。"
+  },
+  "stillLoading": {
+    "message": "文档仍在加载，请稍后再试。"
+  },
+  "reselect": {
+    "message": "页面已重新显示，请重新选中文字。"
+  },
+  "readingPdf": {
+    "message": "正在读取 PDF…"
+  },
+  "needsPassword": {
+    "message": "此 PDF 需要密码，请先用浏览器阅读器解锁后再打开"
+  },
+  "storageError": {
+    "message": "无法读取注释存储，请重新加载扩展"
+  },
+  "pickFile": {
+    "message": "点击「打开文件」选择 PDF，再选中文字生成注释。"
+  },
+  "onlyHttp": {
+    "message": "仅支持 http、https 和本地 file 地址"
+  },
+  "readFailed": {
+    "message": "读取文档失败（HTTP $1）"
+  }
+}

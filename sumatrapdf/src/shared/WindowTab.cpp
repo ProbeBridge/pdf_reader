@@ -1,0 +1,363 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+
+#include "base/Base.h"
+#include "base/File.h"
+#include "base/FileWatcher.h"
+#include "base/GuessFileType.h"
+#if OS_WIN
+#include "base/Win.h"
+#endif
+
+#include "gui/UIModels.h"
+
+#include "Settings.h"
+#include "DocController.h"
+#include "EngineBase.h"
+#include "EngineAll.h"
+#include "AppSettings.h"
+#include "ChmModel.h"
+#include "MarkdownModel.h"
+#include "DisplayModel.h"
+#include "SumatraPDF.h"
+#include "MainWindow.h"
+#include "Selection.h"
+#include "ReadAloud.h"
+#include "Translations.h"
+#if !defined(SUMATRA_NG)
+#include "ReadingAutoScroll.h"
+#include "ReadingBar.h"
+#include "AnnotEditToolbar.h"
+#endif
+#include "AIChatTypes.h"
+#include "AIChatCommon.h"
+#include "HexViewCommon.h"
+#include "WindowTab.h"
+
+WindowTab::WindowTab(MainWindow* win) {
+    this->win = win;
+}
+
+// our open-cache copy goes when its last tab does: a moved or duplicated tab
+// shows the same copy (issue #6481)
+static void DeleteOpenCacheCopyOf(WindowTab* self, Str path) {
+    if (!IsOpenCachePath(path)) {
+        return;
+    }
+    for (MainWindow* win : gWindows) {
+        for (WindowTab* tab : win->Tabs()) {
+            if (tab != self && path::IsSame(tab->filePath, path)) {
+                return;
+            }
+        }
+    }
+    DeleteOpenCacheCopy(path);
+}
+
+void WindowTab::SetFilePath(Str path) {
+    type = Type::Document;
+    isExtraHome = false;
+    bool changed = filePath && !path::IsSame(filePath, path);
+    if (changed) {
+        DeleteOpenCacheCopyOf(this, filePath);
+        temporaryFileNotified = false;
+    }
+    if (changed) {
+        str::FreePtr(&pendingFindText);
+    }
+    str::ReplaceWithCopy(&filePath, path);
+}
+
+void WindowTab::SetDisplayName(Str name) {
+    str::ReplaceWithCopy(&displayName, name);
+}
+
+bool WindowTab::IsAboutTab() const {
+    ReportIf(type == WindowTab::Type::None);
+    return type == WindowTab::Type::About;
+}
+
+#if !defined(SUMATRA_NG)
+// the SidebarView / SidebarBottomView settings
+static const char* kSidebarViewNames[] = {"bookmarks", "thumbnails", "favorites", "signatures", "layers"};
+
+static_assert(dimof(kSidebarViewNames) == kSidebarViewCount);
+
+SidebarView SidebarViewFromStr(Str s, SidebarView def) {
+    for (int i = 0; i < kSidebarViewCount; i++) {
+        if (str::EqI(s, Str(kSidebarViewNames[i]))) {
+            return (SidebarView)i;
+        }
+    }
+    return def;
+}
+
+Str SidebarViewToStr(SidebarView v) {
+    if (ReportIf((int)v < 0 || (int)v >= kSidebarViewCount)) {
+        return {};
+    }
+    return Str(kSidebarViewNames[(int)v]);
+}
+
+#endif
+
+// the first Home tab: compact and fixed in place. IsAboutTab() is any Home tab
+bool WindowTab::IsPinnedHomeTab() const {
+    return IsAboutTab() && !isExtraHome;
+}
+
+bool WindowTab::IsFavoritesTab() const {
+    ReportIf(type == WindowTab::Type::None);
+    return type == WindowTab::Type::Favorites;
+}
+
+bool WindowTab::IsHexTab() const {
+    return type == WindowTab::Type::HexView;
+}
+
+// About, Favorites or hex view: no document controller
+bool WindowTab::IsNonDocumentTab() const {
+    return IsAboutTab() || IsFavoritesTab() || IsHexTab();
+}
+
+#if !defined(SUMATRA_NG)
+// frees a finished background load that was never attached
+void WindowTab::DropPendingLoad() {
+    if (!pendingLoadArgs) {
+        return;
+    }
+    // LoadArgs dtor releases any leftover engine; drop ctrl first so we do
+    // not double-delete through both paths if both were set
+    delete pendingLoadArgs->ctrl;
+    pendingLoadArgs->ctrl = nullptr;
+    SafeEngineRelease(&pendingLoadArgs->engine);
+    delete pendingLoadArgs;
+    pendingLoadArgs = nullptr;
+}
+#endif
+
+WindowTab::~WindowTab() {
+    logf("~WindowTab: 0x%p, dm: 0x%p\n", this, AsFixed());
+#if !defined(SUMATRA_NG)
+    delete signatures;
+#endif
+    // Nothing may point at a tab that is going away.
+    ReadAloudForgetTab(this);
+#if !defined(SUMATRA_NG)
+    ReadingAutoScrollForgetTab(this);
+    ReadingBarForgetTab(this);
+#endif
+    // DestroyWindow can re-enter code that reads these pointers.
+    if (win) {
+        if (win->ctrl == ctrl) {
+            win->ctrl = nullptr;
+        }
+        if (win->currentTabTemp == this) {
+            win->currentTabTemp = nullptr;
+        }
+    }
+#if !defined(SUMATRA_NG)
+    // Full browser teardown next (not mere hide). DestroyWindow pumps; with
+    // win->ctrl already nulled (and isBeingClosed on window close), canvas
+    // re-entry must not touch a freed DisplayModel.
+    if (AsBrowser()) {
+        AsBrowser()->DestroyParentWindow();
+    }
+    if (hwndPDFInfo) {
+        DestroyWindow(hwndPDFInfo);
+        hwndPDFInfo = nullptr;
+    }
+    if (hwndPDFOutline) {
+        DestroyWindow(hwndPDFOutline);
+        hwndPDFOutline = nullptr;
+    }
+    CloseAnnotationUiForTab(this);
+#endif
+    FileWatcherUnsubscribe(watcher);
+    watcher = nullptr;
+    delete selectionOnPage;
+    HexViewFree(hex);
+    hex = nullptr;
+#if !defined(SUMATRA_NG)
+    // technically we only need to clear ctrl == gMostRecentlyOpenedDoc
+    // but gMostRecentlyOpenedDoc is only for dde commands
+    // so doesn't need to be kept for long
+    gMostRecentlyOpenedDoc = nullptr;
+#endif
+    // waits for in-flight renders off the UI thread; deletes on the UI thread
+    DeleteControllerAsync(ctrl);
+    ctrl = nullptr;
+#if !defined(SUMATRA_NG)
+    DropPendingLoad();
+#endif
+    DeleteOpenCacheCopyOf(this, filePath);
+    str::Free(filePath);
+    filePath = {};
+    str::Free(displayName);
+    displayName = {};
+    str::Free(frameTitle);
+    frameTitle = {};
+    str::Free(loadErrorReason);
+    loadErrorReason = {};
+    str::Free(pendingFindText);
+    pendingFindText = {};
+    str::Free(readAloudText);
+    readAloudText = {};
+    if (readAloudHighlight) {
+        ReadAloudHighlightFree(readAloudHighlight);
+        delete readAloudHighlight;
+        readAloudHighlight = nullptr;
+    }
+    // ng too: a running chat's process outlived its closed tab
+    for (AIChatTabState& st : aiChat) {
+        str::Free(st.sessionId);
+        st.sessionId = {};
+        AIChatCloseProcess(&st.process, true);
+    }
+}
+
+bool WindowTab::IsDocLoaded() const {
+    return ctrl != nullptr;
+}
+
+DisplayModel* WindowTab::AsFixed() const {
+    return ctrl ? ctrl->AsFixed() : nullptr;
+}
+
+ChmModel* WindowTab::AsChm() const {
+    return ctrl ? ctrl->AsChm() : nullptr;
+}
+
+MarkdownModel* WindowTab::AsMarkdown() const {
+    return ctrl ? ctrl->AsMarkdown() : nullptr;
+}
+
+BrowserDocController* WindowTab::AsBrowser() const {
+    return ctrl ? ctrl->AsBrowser() : nullptr;
+}
+
+Kind WindowTab::GetEngineType() const {
+    if (ctrl && ctrl->AsFixed()) {
+        return ctrl->AsFixed()->GetEngine()->kind;
+    }
+    return nullptr;
+}
+
+// only if AsFixed()
+EngineBase* WindowTab::GetEngine() const {
+    if (ctrl && ctrl->AsFixed()) {
+        return ctrl->AsFixed()->GetEngine();
+    }
+    return nullptr;
+}
+
+Str WindowTab::GetTabTitle() const {
+    if (displayName) {
+        return displayName;
+    }
+    if (len(filePath) == 0) {
+        if (IsAboutTab()) {
+            return StrL("Home");
+        }
+        if (IsFavoritesTab()) {
+            // same label as Favorites menu / sidebar header
+            return Tr("Favorites");
+        }
+        return StrL("");
+    }
+    if (IsHexTab()) {
+        Str name = gSettings->fullPathInTitle ? filePath : path::GetBaseNameTemp(filePath);
+        return fmt("%s (hex)", name);
+    }
+    TempStr embeddedFileName = ParseEmbeddedPdfName(filePath).fileName;
+    if (embeddedFileName) {
+        return embeddedFileName;
+    }
+    if (gSettings->fullPathInTitle) {
+        return filePath;
+    }
+    return path::GetBaseNameTemp(filePath);
+}
+
+void WindowTab::MoveDocBy(int dx, int dy) const {
+    if (!ctrl) {
+        return;
+    }
+    DisplayModel* dm = ctrl->AsFixed();
+    ReportIf(!dm);
+    if (!dm) {
+        return;
+    }
+#if !defined(SUMATRA_NG)
+    ReportIf(win->linkOnLastButtonDown);
+    if (win->linkOnLastButtonDown) {
+        return;
+    }
+#endif
+    if (0 != dx) {
+        dm->ScrollXBy(dx);
+    }
+    if (0 != dy) {
+        dm->ScrollYBy(dy, false);
+    }
+
+    if (win && !win->readAloudScrollFromCode) {
+        ReadAloudOnUserViewChanged(win);
+    }
+}
+
+// the zoom ToggleZoom() would switch to. Split out so the command palette can
+// name it without repeating (and drifting from) the cycle
+float WindowTab::NextToggleZoom() const {
+    static const float levels[] = {kZoomFitPage,    kZoomFitWidth,   kZoomFitHeight,
+                                   kZoomFitContent, kZoomFitVisible, kZoomShrinkToFit};
+    float currZoom = ctrl ? ctrl->GetZoomVirtual() : kInvalidZoom;
+    for (int i = 0; i < dimof(levels); i++) {
+        if (currZoom == levels[i]) {
+            return levels[(i + 1) % dimof(levels)];
+        }
+    }
+    return levels[0];
+}
+
+void WindowTab::ToggleZoom() const {
+    if (!IsDocLoaded()) {
+        return;
+    }
+    ctrl->SetZoomVirtual(NextToggleZoom(), nullptr);
+}
+#if !defined(SUMATRA_NG)
+
+bool SaveDataToFile(HWND hwndParent, Str fileName, Str data) {
+    if (!CanAccessDisk()) {
+        return false;
+    }
+
+    OPENFILENAME ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwndParent;
+
+    WCHAR dstFileName[MAX_PATH] = {};
+    if (fileName) {
+        str::BufSet(dstFileName, dimof(dstFileName), fileName);
+    }
+    ofn.lpstrFile = dstFileName;
+    ofn.nMaxFile = dimof(dstFileName);
+
+    // Prepare the file filters (use \1 instead of \0 so that the
+    // double-zero terminated string isn't cut by the string handling
+    // methods too early on)
+    TempStr fileFilterA = fmt("%s\1*.*\1", Tr("All files"));
+    TempWStr fileFilter = ToWStrTemp(fileFilterA);
+    wstr::TransCharsInPlace(fileFilter, WStrL(L"\1"), WStrL(L"\0"));
+    ofn.lpstrFilter = fileFilter.s;
+
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+
+    if (!(TakeTestSaveFileName(&ofn) || GetSaveFileNameW(&ofn))) {
+        return false;
+    }
+    return file::WriteFile(ToUtf8Temp(dstFileName), data);
+}
+#endif

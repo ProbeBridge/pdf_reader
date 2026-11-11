@@ -1,0 +1,593 @@
+{
+  "extName": {
+    "message": "Reading Notes"
+  },
+  "extDescription": {
+    "message": "Select text on a page and an LLM explains it in context in the side panel. Highlights and cards stay linked, and notes come back in place next time."
+  },
+  "actionTitle": {
+    "message": "Open the Reading Notes side panel"
+  },
+  "cmdAnnotate": {
+    "message": "Annotate the selected text"
+  },
+  "menuAnnotate": {
+    "message": "Annotate “%s”"
+  },
+  "errOpenPdfFirst": {
+    "message": "Open an online or local PDF first."
+  },
+  "errPdfPage": {
+    "message": "Couldn't recognise the PDF reader page."
+  },
+  "errEmptyQuestion": {
+    "message": "The question is empty."
+  },
+  "errNoteGone": {
+    "message": "This note no longer exists."
+  },
+  "errWaitNote": {
+    "message": "Wait for the note to finish before asking."
+  },
+  "errAskBusy": {
+    "message": "The previous question is still being answered."
+  },
+  "errNothingToRestore": {
+    "message": "Nothing to restore."
+  },
+  "selectFirst": {
+    "message": "Select some text on the page first."
+  },
+  "noTextSelected": {
+    "message": "There's no text in the selection."
+  },
+  "selectionTooLong": {
+    "message": "The selection is too long (limit: $1 characters)."
+  },
+  "saveFailed": {
+    "message": "Couldn't save: $1"
+  },
+  "noResponse": {
+    "message": "The extension isn't responding."
+  },
+  "noResponsePdf": {
+    "message": "The extension isn't responding. Reload the extension and the document."
+  },
+  "floatTitle": {
+    "message": "Explain the selected text (Alt+Shift+A)"
+  },
+  "floatLabel": {
+    "message": "Annotate"
+  },
+  "deleteNote": {
+    "message": "Delete this note"
+  },
+  "undo": {
+    "message": "Undo"
+  },
+  "deleteFailed": {
+    "message": "Couldn't delete. Please try again."
+  },
+  "noteDeleted": {
+    "message": "Note deleted"
+  },
+  "restoreFailed": {
+    "message": "Couldn't restore the note."
+  },
+  "staleReload": {
+    "message": "Reading Notes was updated. Reload the page to keep using it."
+  },
+  "errNoKey": {
+    "message": "No API key yet. Add one in Settings."
+  },
+  "errNoModel": {
+    "message": "No model name yet. Add one in Settings."
+  },
+  "errApi": {
+    "message": "The API returned an error: $1"
+  },
+  "refusalCategory": {
+    "message": " (category: $1)"
+  },
+  "errRefused": {
+    "message": "The model refused this request$1. Try another model or a different selection."
+  },
+  "truncated": {
+    "message": "(The answer hit the length limit and was cut off.)"
+  },
+  "errNoText": {
+    "message": "The model returned no text ($1)."
+  },
+  "unknown": {
+    "message": "unknown"
+  },
+  "modelFellBack": {
+    "message": "$1 (fallback)"
+  },
+  "errAllModels": {
+    "message": "None of the candidate models is available right now:\n$1"
+  },
+  "slowerThan": {
+    "message": "slower than $1, skipped for now"
+  },
+  "modelSwapped": {
+    "message": "$1 ($2 unavailable, switched automatically)"
+  },
+  "noResponseIn": {
+    "message": "No response within $1 seconds"
+  },
+  "errNetwork": {
+    "message": "Network request failed: $1"
+  },
+  "errConnLost": {
+    "message": "Connection dropped: $1"
+  },
+  "errGeminiBlocked": {
+    "message": "Gemini's safety filter blocked the request ($1)."
+  },
+  "errGeminiEmpty": {
+    "message": "Gemini generated nothing (finishReason: $1)."
+  },
+  "errNetworkHint": {
+    "message": "Network request failed: $1 (check the network or proxy, and the Base URL)"
+  },
+  "httpError": {
+    "message": "HTTP $1: $2"
+  },
+  "http401": {
+    "message": " (invalid API key)"
+  },
+  "http403": {
+    "message": " (no permission)"
+  },
+  "http404": {
+    "message": " (wrong URL or model name)"
+  },
+  "http429": {
+    "message": " (rate limited; try again later)"
+  },
+  "zoomGroup": {
+    "message": "Panel zoom"
+  },
+  "zoomOut": {
+    "message": "Smaller"
+  },
+  "zoomIn": {
+    "message": "Larger"
+  },
+  "zoomReset": {
+    "message": "Reset size"
+  },
+  "settings": {
+    "message": "Settings"
+  },
+  "keyBanner": {
+    "message": "No API key yet, so notes can't be written. "
+  },
+  "goToSettings": {
+    "message": "Open Settings"
+  },
+  "pdfBanner": {
+    "message": "If this is a PDF, open it in the annotation reader. "
+  },
+  "openPdfReader": {
+    "message": "Open in PDF reader"
+  },
+  "emptyTitle": {
+    "message": "No notes on this page yet"
+  },
+  "emptyStep1": {
+    "message": "Click an English word, or select a phrase or sentence on the page or PDF"
+  },
+  "emptyStep2": {
+    "message": "Click the <span class=\"kbd-chip\">Annotate</span> button that appears, press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd>, or right-click → Annotate"
+  },
+  "emptyStep3": {
+    "message": "The model gives a Chinese equivalent from the whole paragraph, with a folded detailed explanation; each card lines up with its word"
+  },
+  "unsupportedTitle": {
+    "message": "Notes aren't available on this page"
+  },
+  "unsupportedWhy": {
+    "message": "Browser pages and the Web Store can't be annotated. For PDFs, use this extension's PDF reader."
+  },
+  "unsupportedFile": {
+    "message": "For local files, turn on “Allow access to file URLs” for this extension in chrome://extensions."
+  },
+  "explainTitle": {
+    "message": "Ask the model to explain the selected part of the note"
+  },
+  "explainLabel": {
+    "message": "Explain this"
+  },
+  "explainAsk": {
+    "message": "Please explain “$1”, which you mentioned above."
+  },
+  "openSettings": {
+    "message": "Open Settings"
+  },
+  "retry": {
+    "message": "Retry"
+  },
+  "askQ": {
+    "message": "Q"
+  },
+  "confirmDeleteShort": {
+    "message": "Delete?"
+  },
+  "deleteQuestion": {
+    "message": "Delete this question"
+  },
+  "answering": {
+    "message": "Answering…"
+  },
+  "answerInterrupted": {
+    "message": "The answer was interrupted (the extension may have restarted)."
+  },
+  "answerFailed": {
+    "message": "The answer failed."
+  },
+  "askPlaceholder": {
+    "message": "Ask more, e.g. a more casual translation? What does “it” refer to here?"
+  },
+  "send": {
+    "message": "Send"
+  },
+  "askBusyHint": {
+    "message": "Wait for this answer before asking more"
+  },
+  "askKeysHint": {
+    "message": "Enter to send · Shift+Enter for a new line · Esc to close"
+  },
+  "detailShow": {
+    "message": "Show the detailed explanation"
+  },
+  "detailHide": {
+    "message": "Hide the detailed explanation"
+  },
+  "generatingSuffix": {
+    "message": " (writing…)"
+  },
+  "locateTitle": {
+    "message": "Show in the page"
+  },
+  "ipaTitle": {
+    "message": "IPA (as read in this passage)"
+  },
+  "orphan": {
+    "message": "Couldn't find the original text on this page"
+  },
+  "generatingShort": {
+    "message": "Writing…"
+  },
+  "generatingNote": {
+    "message": "Writing the note from the context…"
+  },
+  "genInterrupted": {
+    "message": "Writing was interrupted (the extension may have restarted)."
+  },
+  "genFailed": {
+    "message": "Couldn't write the note."
+  },
+  "detailButton": {
+    "message": "Details"
+  },
+  "speak": {
+    "message": "Read aloud (American English)"
+  },
+  "ask": {
+    "message": "Ask a follow-up"
+  },
+  "askLocked": {
+    "message": "You can ask once the note is ready"
+  },
+  "regenerate": {
+    "message": "Regenerate"
+  },
+  "lastModel": {
+    "message": " (last: $1)"
+  },
+  "copyMd": {
+    "message": "Copy (Markdown)"
+  },
+  "confirmDelete": {
+    "message": "Confirm delete"
+  },
+  "deleteTwice": {
+    "message": "Delete (click twice)"
+  },
+  "delete": {
+    "message": "Delete"
+  },
+  "pageNo": {
+    "message": "p. $1"
+  },
+  "gotoSource": {
+    "message": "Go to the passage"
+  },
+  "mdDetail": {
+    "message": "Detailed explanation"
+  },
+  "mdFollowup": {
+    "message": "Follow-up:"
+  },
+  "noteCountOne": {
+    "message": "1 note"
+  },
+  "noteCount": {
+    "message": "$1 notes"
+  },
+  "zoomToast": {
+    "message": "Panel $1% ($2 to reset)"
+  },
+  "zoomInTitle": {
+    "message": "Larger ($1+ or $1 + wheel)"
+  },
+  "zoomOutTitle": {
+    "message": "Smaller ($1−)"
+  },
+  "zoomResetTitle": {
+    "message": "Reset to 100% ($1)"
+  },
+  "optionsTitle": {
+    "message": "Reading Notes · Settings"
+  },
+  "optionsLead": {
+    "message": "Settings stay in this browser on this computer (chrome.storage.local). They aren't synced, and nothing is sent anywhere except the API you enter."
+  },
+  "secApi": {
+    "message": "Model API"
+  },
+  "provider": {
+    "message": "Provider"
+  },
+  "providerGemini": {
+    "message": "Google Gemini (free tier available)"
+  },
+  "providerAnthropic": {
+    "message": "Anthropic (Claude)"
+  },
+  "providerOpenai": {
+    "message": "OpenAI-compatible API (DeepSeek, Kimi, Qwen, OpenRouter, local models…)"
+  },
+  "show": {
+    "message": "Show"
+  },
+  "hide": {
+    "message": "Hide"
+  },
+  "optional": {
+    "message": "optional"
+  },
+  "model": {
+    "message": "Model"
+  },
+  "effort": {
+    "message": "Thinking effort"
+  },
+  "effortLow": {
+    "message": "low: fastest, fine for everyday words and long sentences (recommended)"
+  },
+  "effortMedium": {
+    "message": "medium: more careful, for writing full of irony and allusions"
+  },
+  "effortHigh": {
+    "message": "high: slowest and most expensive"
+  },
+  "effortDefault": {
+    "message": "Don't send; use the model's default"
+  },
+  "secPrompts": {
+    "message": "Prompts"
+  },
+  "notePrompt": {
+    "message": "Note prompt"
+  },
+  "notePromptSub": {
+    "message": "First note: a short Chinese equivalent + a folded detailed explanation"
+  },
+  "notePromptHint": {
+    "message": "Requests include the page title, the URL, the whole paragraph around the selection (<paragraph>) and the selection (<selection>). The output format (the IPA line and the 【详解】 separator) is added automatically; don't write it here. "
+  },
+  "resetDefault": {
+    "message": "Reset to default"
+  },
+  "followPrompt": {
+    "message": "Follow-up prompt"
+  },
+  "followPromptSub": {
+    "message": "Follow-up questions and “Explain this” on cards"
+  },
+  "followPromptHint": {
+    "message": "For follow-ups the model sees the paragraph, the first note (with its detailed explanation) and all earlier questions and answers. "
+  },
+  "secIpa": {
+    "message": "Pronunciation"
+  },
+  "ipaLabel": {
+    "message": "IPA"
+  },
+  "ipaUs": {
+    "message": "American"
+  },
+  "ipaUk": {
+    "message": "British"
+  },
+  "ipaOff": {
+    "message": "Off"
+  },
+  "ipaHint": {
+    "message": "For words, phrases and names of up to 6 words, the model gives the IPA as read in that passage. It appears after the word on the card and when you hover over the highlight. Regenerate older notes to add it."
+  },
+  "secInteraction": {
+    "message": "On the page"
+  },
+  "floatingButtonLabel": {
+    "message": "Show the floating “Annotate” button next to selected text"
+  },
+  "clickToAnnotateLabel": {
+    "message": "Click an English word to annotate it; click an annotated word to jump to its note (double and triple clicks still select text)"
+  },
+  "shortcutHint": {
+    "message": "You can also press <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> or use the right-click menu. Change the shortcut at "
+  },
+  "save": {
+    "message": "Save"
+  },
+  "testConnection": {
+    "message": "Test connection"
+  },
+  "secData": {
+    "message": "Data"
+  },
+  "counting": {
+    "message": "Counting…"
+  },
+  "exportAll": {
+    "message": "Export all notes (JSON)"
+  },
+  "import": {
+    "message": "Import"
+  },
+  "clearAll": {
+    "message": "Delete all notes"
+  },
+  "baseHintGemini": {
+    "message": "Leave empty for the official https://generativelanguage.googleapis.com. The browser uses the system proxy; where Google is blocked, keep the proxy on."
+  },
+  "baseHintAnthropic": {
+    "message": "Leave empty for the official https://api.anthropic.com. For a relay or proxy, enter its address (without /v1/messages)."
+  },
+  "baseHintOpenai": {
+    "message": "Up to /v1, e.g. https://api.deepseek.com/v1, https://openrouter.ai/api/v1, http://localhost:11434/v1."
+  },
+  "keyPlaceholderGemini": {
+    "message": "Paste the key, or the whole curl command from AI Studio"
+  },
+  "modelHintGemini": {
+    "message": "auto (recommended): tries the newest Flash models first and moves on when one is overloaded, rate-limited or slow, checking in the background when a better one is back. A specific model also switches to another when it's unavailable."
+  },
+  "modelHintAnthropic": {
+    "message": "claude-opus-5-5 gives the best quality; claude-sonnet-5-5 is faster and cheaper; claude-haiku-5-5 is the cheapest."
+  },
+  "modelHintOpenai": {
+    "message": "Use the model name from the provider's docs, e.g. deepseek-chat."
+  },
+  "saved": {
+    "message": "Saved"
+  },
+  "requesting": {
+    "message": "Requesting…"
+  },
+  "connOk": {
+    "message": "Connected · $1 replied: “$2” (remember to Save if you haven't)"
+  },
+  "stats": {
+    "message": "$1 pages, $2 notes."
+  },
+  "errNoPages": {
+    "message": "The file has no “pages” field"
+  },
+  "imported": {
+    "message": "Imported $1 notes (ones already here are skipped)"
+  },
+  "importFailed": {
+    "message": "Import failed: $1"
+  },
+  "confirmClear": {
+    "message": "Click again to delete everything"
+  },
+  "cleared": {
+    "message": "Deleted"
+  },
+  "pdfTitle": {
+    "message": "PDF · Reading Notes"
+  },
+  "docTitle": {
+    "message": "$1 · Reading Notes"
+  },
+  "pdfDocument": {
+    "message": "PDF document"
+  },
+  "prevPage": {
+    "message": "Previous page"
+  },
+  "nextPage": {
+    "message": "Next page"
+  },
+  "pagePrefix": {
+    "message": "Page"
+  },
+  "pageSuffix": {
+    "message": " "
+  },
+  "pageNumber": {
+    "message": "Page number"
+  },
+  "pageAria": {
+    "message": "Page $1"
+  },
+  "fitWidth": {
+    "message": "Fit width"
+  },
+  "rotateTitle": {
+    "message": "Rotate 90° clockwise and fit width"
+  },
+  "rotate": {
+    "message": "Rotate"
+  },
+  "annotateSelection": {
+    "message": "Annotate selection"
+  },
+  "openPanel": {
+    "message": "Notes panel"
+  },
+  "openFile": {
+    "message": "Open file"
+  },
+  "opening": {
+    "message": "Opening the PDF…"
+  },
+  "nativeViewer": {
+    "message": "Open in the browser's reader"
+  },
+  "pdfOpenFailed": {
+    "message": "Couldn't open the PDF: $1. You can pick a local PDF with “Open file”."
+  },
+  "pageRenderFailed": {
+    "message": "Couldn't show this page: $1"
+  },
+  "noTextLayer": {
+    "message": "No selectable text on this page (scans need OCR)"
+  },
+  "samePage": {
+    "message": "Select text within one page (it can span lines)."
+  },
+  "selectPdfFirst": {
+    "message": "Select a word, phrase or sentence in the PDF first."
+  },
+  "stillLoading": {
+    "message": "The document is still loading. Try again in a moment."
+  },
+  "reselect": {
+    "message": "The page was redrawn. Please select the text again."
+  },
+  "readingPdf": {
+    "message": "Reading the PDF…"
+  },
+  "needsPassword": {
+    "message": "This PDF needs a password. Unlock it in the browser's reader first."
+  },
+  "storageError": {
+    "message": "Couldn't read the stored notes. Reload the extension."
+  },
+  "pickFile": {
+    "message": "Click “Open file” to pick a PDF, then select text to annotate it."
+  },
+  "onlyHttp": {
+    "message": "Only http, https and local file addresses are supported"
+  },
+  "readFailed": {
+    "message": "Couldn't read the document (HTTP $1)"
+  }
+}

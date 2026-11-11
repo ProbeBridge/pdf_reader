@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>正文重排</title>
+    <link rel="stylesheet" href="reflow.css" />
+    <script type="module" src="reflow.js"></script>
+  </head>
+  <body>
+    <nav aria-label="重排阅读">
+      <button id="previous" type="button">上一页</button>
+      <span id="page-label"></span>
+      <button id="next" type="button">下一页</button>
+      <span class="spacer"></span>
+      <button id="annotate" type="button">AI 注释选中文本</button>
+      <button id="original" type="button">原版</button>
+    </nav>
+    <p id="status" role="status"></p>
+    <main id="pages"></main>
+    <div id="note-actions" hidden>
+      <span id="note-ipa"></span><button id="focus-note" type="button">查看注释</button
+      ><button id="delete-note" type="button">删除</button>
+    </div>
+  </body>
+</html>

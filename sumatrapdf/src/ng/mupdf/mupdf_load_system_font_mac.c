@@ -1,0 +1,376 @@
+/* Copyright 2026 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+
+#include "mupdf/fitz.h"
+#include "mupdf/ucdn.h"
+#include "mupdf/font_common.h"
+
+#include <CoreText/CoreText.h>
+
+typedef struct mac_font_table {
+    uint32_t tag;
+    uint32_t offset;
+    uint32_t length;
+    CFDataRef data;
+} mac_font_table;
+
+static void write_be16(unsigned char* p, uint16_t value) {
+    p[0] = (unsigned char)(value >> 8);
+    p[1] = (unsigned char)value;
+}
+
+static void write_be32(unsigned char* p, uint32_t value) {
+    p[0] = (unsigned char)(value >> 24);
+    p[1] = (unsigned char)(value >> 16);
+    p[2] = (unsigned char)(value >> 8);
+    p[3] = (unsigned char)value;
+}
+
+static uint32_t table_checksum(const unsigned char* data, size_t size) {
+    uint32_t sum = 0;
+    for (size_t i = 0; i < size; i += 4) {
+        uint32_t word = (uint32_t)data[i] << 24;
+        if (i + 1 < size) {
+            word |= (uint32_t)data[i + 1] << 16;
+        }
+        if (i + 2 < size) {
+            word |= (uint32_t)data[i + 2] << 8;
+        }
+        if (i + 3 < size) {
+            word |= data[i + 3];
+        }
+        sum += word;
+    }
+    return sum;
+}
+
+static int compare_tables(const void* a, const void* b) {
+    uint32_t ta = ((const mac_font_table*)a)->tag;
+    uint32_t tb = ((const mac_font_table*)b)->tag;
+    return ta < tb ? -1 : ta > tb;
+}
+
+static void free_tables(mac_font_table* tables, int count) {
+    for (int i = 0; i < count; i++) {
+        CFRelease(tables[i].data);
+    }
+    free(tables);
+}
+
+// ct_font's tables as one sfnt file, malloc'ed; NULL on failure
+static unsigned char* ct_font_sfnt(CTFontRef ct_font, size_t* total_out) {
+    *total_out = 0;
+    CFArrayRef tags = CTFontCopyAvailableTables(ct_font, kCTFontTableOptionNoOptions);
+    if (!tags) {
+        return NULL;
+    }
+    CFIndex tag_count = CFArrayGetCount(tags);
+    if (tag_count <= 0 || tag_count > UINT16_MAX) {
+        CFRelease(tags);
+        return NULL;
+    }
+
+    mac_font_table* tables = calloc((size_t)tag_count, sizeof(*tables));
+    if (!tables) {
+        CFRelease(tags);
+        return NULL;
+    }
+    int count = 0;
+    size_t table_data_size = 0;
+    for (CFIndex i = 0; i < tag_count; i++) {
+        // CTFontCopyAvailableTables stores raw FourCharCodes, not CFNumbers.
+        CTFontTableTag tag = (CTFontTableTag)(uintptr_t)CFArrayGetValueAtIndex(tags, i);
+        if (!tag) {
+            continue;
+        }
+        CFDataRef data = CTFontCopyTable(ct_font, tag, kCTFontTableOptionNoOptions);
+        if (!data) {
+            continue;
+        }
+        CFIndex length = CFDataGetLength(data);
+        size_t padded = length > 0 ? ((size_t)length + 3) & ~(size_t)3 : 0;
+        if (length <= 0 || length > UINT32_MAX || padded > SIZE_MAX - table_data_size) {
+            CFRelease(data);
+            continue;
+        }
+        tables[count].tag = tag;
+        tables[count].length = (uint32_t)length;
+        tables[count].data = data;
+        table_data_size += padded;
+        count++;
+    }
+    CFRelease(tags);
+    size_t header_size = 12 + (size_t)count * 16;
+    if (count == 0 || table_data_size > UINT32_MAX - header_size) {
+        free_tables(tables, count);
+        return NULL;
+    }
+    size_t total = header_size + table_data_size;
+
+    qsort(tables, (size_t)count, sizeof(*tables), compare_tables);
+    unsigned char* font_data = calloc(1, total);
+    if (!font_data) {
+        free_tables(tables, count);
+        return NULL;
+    }
+
+    uint32_t scaler = 0x00010000;
+    for (int i = 0; i < count; i++) {
+        if (tables[i].tag == 0x43464620 || tables[i].tag == 0x43464632) {
+            scaler = 0x4f54544f;
+            break;
+        }
+    }
+    write_be32(font_data, scaler);
+    write_be16(font_data + 4, (uint16_t)count);
+    int selector = 0;
+    int power = 1;
+    while (power * 2 <= count) {
+        power *= 2;
+        selector++;
+    }
+    write_be16(font_data + 6, (uint16_t)(power * 16));
+    write_be16(font_data + 8, (uint16_t)selector);
+    write_be16(font_data + 10, (uint16_t)(count * 16 - power * 16));
+
+    size_t offset = header_size;
+    size_t head_offset = 0;
+    for (int i = 0; i < count; i++) {
+        mac_font_table* table = &tables[i];
+        table->offset = (uint32_t)offset;
+        memcpy(font_data + offset, CFDataGetBytePtr(table->data), table->length);
+        if (table->tag == 0x68656164 && table->length >= 12) {
+            head_offset = offset;
+            memset(font_data + offset + 8, 0, 4);
+        }
+        unsigned char* entry = font_data + 12 + (size_t)i * 16;
+        write_be32(entry, table->tag);
+        write_be32(entry + 4, table_checksum(font_data + offset, table->length));
+        write_be32(entry + 8, table->offset);
+        write_be32(entry + 12, table->length);
+        offset += ((size_t)table->length + 3) & ~(size_t)3;
+    }
+    if (head_offset) {
+        write_be32(font_data + head_offset + 8, 0xb1b0afba - table_checksum(font_data, total));
+    }
+    free_tables(tables, count);
+    *total_out = total;
+    return font_data;
+}
+
+static fz_font* load_ct_font_data(fz_context* ctx, const char* name, CTFontRef ct_font) {
+    size_t total = 0;
+    unsigned char* font_data = ct_font_sfnt(ct_font, &total);
+    if (!font_data) {
+        return NULL;
+    }
+    fz_buffer* buffer = NULL;
+    fz_font* font = NULL;
+    fz_try(ctx) {
+        buffer = fz_new_buffer_from_copied_data(ctx, font_data, total);
+        font = fz_new_font_from_buffer(ctx, name, buffer, 0, 0);
+    }
+    fz_always(ctx) {
+        fz_drop_buffer(ctx, buffer);
+        free(font_data);
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+    return font;
+}
+
+static int font_name_matches(CTFontRef font, CFStringRef wanted) {
+    CFStringRef names[3];
+    names[0] = CTFontCopyPostScriptName(font);
+    names[1] = CTFontCopyFullName(font);
+    names[2] = CTFontCopyFamilyName(font);
+    int matches = 0;
+    for (int i = 0; i < 3; i++) {
+        if (names[i] && CFStringCompare(names[i], wanted, kCFCompareCaseInsensitive) == kCFCompareEqualTo) {
+            matches = 1;
+        }
+        if (names[i]) {
+            CFRelease(names[i]);
+        }
+    }
+    return matches;
+}
+
+static CTFontRef create_named_font(const char* name, int bold, int italic, int exact) {
+    const char* wanted = name && *name ? name : "Helvetica";
+    if (!strcmp(wanted, "sans-serif")) {
+        wanted = "Helvetica";
+    } else if (!strcmp(wanted, "serif")) {
+        wanted = "Times";
+    } else if (!strcmp(wanted, "monospace")) {
+        wanted = "Courier";
+    }
+    CFStringRef font_name = CFStringCreateWithCString(NULL, wanted, kCFStringEncodingUTF8);
+    if (!font_name) {
+        return NULL;
+    }
+    CTFontRef font = CTFontCreateWithName(font_name, 12, NULL);
+    if (font && exact && !font_name_matches(font, font_name)) {
+        CFRelease(font);
+        font = NULL;
+    }
+    CFRelease(font_name);
+    if (!font) {
+        return NULL;
+    }
+    CTFontSymbolicTraits traits = 0;
+    if (bold) {
+        traits |= kCTFontBoldTrait;
+    }
+    if (italic) {
+        traits |= kCTFontItalicTrait;
+    }
+    if (traits) {
+        CTFontRef styled = CTFontCreateCopyWithSymbolicTraits(font, 0, NULL, traits, traits);
+        if (styled) {
+            CFRelease(font);
+            font = styled;
+        }
+    }
+    return font;
+}
+
+static CFStringRef string_for_rune(unsigned int rune) {
+    UniChar chars[2];
+    CFIndex count = 1;
+    if (rune <= 0xffff) {
+        chars[0] = (UniChar)rune;
+    } else {
+        rune -= 0x10000;
+        chars[0] = (UniChar)(0xd800 + (rune >> 10));
+        chars[1] = (UniChar)(0xdc00 + (rune & 0x3ff));
+        count = 2;
+    }
+    return CFStringCreateWithCharacters(NULL, chars, count);
+}
+
+static int ct_font_has_rune(CTFontRef font, unsigned int rune) {
+    UniChar chars[2];
+    CGGlyph glyphs[2] = {0, 0};
+    CFIndex count = 1;
+    if (rune <= 0xffff) {
+        chars[0] = (UniChar)rune;
+    } else {
+        unsigned int r = rune - 0x10000;
+        chars[0] = (UniChar)(0xd800 + (r >> 10));
+        chars[1] = (UniChar)(0xdc00 + (r & 0x3ff));
+        count = 2;
+    }
+    return CTFontGetGlyphsForCharacters(font, chars, glyphs, count) && glyphs[0] != 0;
+}
+
+// A font that has rune, or NULL. CoreText falls back to the base font when no
+// font has it; that one would draw boxes instead of mupdf's own fallback font.
+static CTFontRef create_fallback_font(int serif, int bold, int italic, unsigned int rune) {
+    CTFontRef base = create_named_font(serif ? "Times" : "Helvetica", bold, italic, 0);
+    if (!base || !rune) {
+        return base;
+    }
+    CFStringRef text = string_for_rune(rune);
+    CTFontRef font = text ? CTFontCreateForString(base, text, CFRangeMake(0, CFStringGetLength(text))) : NULL;
+    if (text) {
+        CFRelease(text);
+    }
+    CFRelease(base);
+    if (font && !ct_font_has_rune(font, rune)) {
+        CFRelease(font);
+        font = NULL;
+    }
+    return font;
+}
+
+static fz_font* load_mac_font(fz_context* ctx, const char* name, int bold, int italic, int exact) {
+    CTFontRef font = is_cjk_body_font_alias(name, &bold) ? create_fallback_font(0, bold, italic, 0x4e00)
+                                                         : create_named_font(name, bold, italic, exact);
+    if (!font) {
+        return NULL;
+    }
+    fz_font* result = load_ct_font_data(ctx, name, font);
+    CFRelease(font);
+    return result;
+}
+
+static fz_font* load_mac_cjk_font(fz_context* ctx, const char* name, int ordering, int serif) {
+    unsigned int rune = 0x4e00;
+    if (ordering == FZ_ADOBE_JAPAN) {
+        rune = 0x3042;
+    } else if (ordering == FZ_ADOBE_KOREA) {
+        rune = 0xac00;
+    }
+    CTFontRef font = name && *name ? create_named_font(name, 0, 0, 0) : NULL;
+    if (font && !ct_font_has_rune(font, rune)) {
+        CFRelease(font);
+        font = NULL;
+    }
+    if (!font) {
+        font = create_fallback_font(serif, 0, 0, rune);
+    }
+    if (!font) {
+        return NULL;
+    }
+    fz_font* result = load_ct_font_data(ctx, name, font);
+    CFRelease(font);
+    return result;
+}
+
+static fz_font* load_mac_fallback_font(fz_context* ctx, int script, int language, int serif, int bold, int italic) {
+    (void)language;
+    unsigned int rune = fallback_rune(script);
+    if (!rune) {
+        return NULL;
+    }
+    CTFontRef font = create_fallback_font(serif, bold, italic, rune);
+    if (!font) {
+        return NULL;
+    }
+    fz_font* result = load_ct_font_data(ctx, NULL, font);
+    CFRelease(font);
+    return result;
+}
+
+// whether CoreText has outlines for the font: Apple Color Emoji has only
+// bitmaps (sbix), which mupdf doesn't draw
+static int ct_font_has_outlines(CTFontRef font) {
+    const CTFontTableTag tags[] = {0x676c7966 /* glyf */, 0x43464620 /* CFF */, 0x43464632 /* CFF2 */};
+    for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
+        CFDataRef data = CTFontCopyTable(font, tags[i], kCTFontTableOptionNoOptions);
+        if (data) {
+            CFRelease(data);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// The bytes of a system font that has rune, malloc'ed, or NULL. For the
+// built-in font loader (EmbeddedResources.cpp), e.g. Apple Symbols for the
+// symbols mupdf would otherwise download Noto fonts for.
+unsigned char* sumatra_system_font_data_for_rune(unsigned int rune, int* size) {
+    *size = 0;
+    CTFontRef font = create_fallback_font(0, 0, 0, rune);
+    if (!font) {
+        return NULL;
+    }
+    unsigned char* data = NULL;
+    size_t total = 0;
+    if (ct_font_has_outlines(font)) {
+        data = ct_font_sfnt(font, &total);
+    }
+    CFRelease(font);
+    if (!data || total > INT32_MAX) {
+        free(data);
+        return NULL;
+    }
+    *size = (int)total;
+    return data;
+}
+
+void install_load_mac_font_funcs(fz_context* ctx) {
+    fz_install_load_system_font_funcs(ctx, load_mac_font, load_mac_cjk_font, load_mac_fallback_font);
+}

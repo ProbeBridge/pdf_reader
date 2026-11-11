@@ -1,0 +1,907 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: Simplified BSD (see COPYING.BSD) */
+
+#include "base/Base.h"
+
+#if OS_WIN
+#include "base/File.h"
+#include "base/ScopedWin.h"
+#include "base/Win.h"
+
+#include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
+#endif
+
+#include "base/Http.h"
+
+HttpRsp::~HttpRsp() {
+    str::Free(url);
+}
+
+bool IsHttpRspOk(const HttpRsp* rsp) {
+    if (rsp->error != 0) {
+        logf("HttpRspOk: rsp->error %d, should be 0\n", (int)rsp->error);
+        return false;
+    }
+    if (rsp->httpStatusCode >= 300) {
+        logf("HttpRspOk: rsp->httpStatusCode: %d\n", (int)rsp->httpStatusCode);
+        return false;
+    }
+    return true;
+}
+
+#if OS_WIN
+
+// per RFC 1945 10.15 and 3.7, a user agent product token shouldn't contain whitespace
+constexpr const WCHAR* kUserAgent = L"SumatraPdfHTTP";
+
+// returns false if failed to download or status code is not 200
+// for other scenarios, check HttpRsp
+// InternetOpen + InternetOpenUrl + status query. On failure both handles are
+// null and the caller reads GetLastError().
+static bool OpenHttpRequest(Str urlA, DWORD flags, HINTERNET* hInetOut, HINTERNET* hReqOut, DWORD* statusOut) {
+    *hInetOut = nullptr;
+    *hReqOut = nullptr;
+    HINTERNET hInet = InternetOpenW(kUserAgent, INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+    if (!hInet) {
+        logf("OpenHttpRequest: InternetOpen failed\n");
+        return false;
+    }
+    HINTERNET hReq = InternetOpenUrlW(hInet, CWStrTemp(urlA), nullptr, 0, flags, 0);
+    DWORD size = sizeof(DWORD);
+    if (!hReq || !HttpQueryInfoW(hReq, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, statusOut, &size, nullptr)) {
+        logf("OpenHttpRequest: %s failed\n", hReq ? StrL("HttpQueryInfoW") : StrL("InternetOpenUrl"));
+        DWORD err = GetLastError();
+        if (hReq) {
+            InternetCloseHandle(hReq);
+        }
+        InternetCloseHandle(hInet);
+        SetLastError(err);
+        return false;
+    }
+    *hInetOut = hInet;
+    *hReqOut = hReq;
+    return true;
+}
+
+bool HttpGet(Str urlA, HttpRsp* rspOut) {
+    logf("HttpGet: url: '%s'\n", urlA);
+    HINTERNET hReq = nullptr;
+    HINTERNET hInet = nullptr;
+    // NB: do NOT add INTERNET_FLAG_IGNORE_CERT_CN_INVALID here - it disables TLS
+    // hostname validation, letting a network attacker with any trusted cert
+    // impersonate our update-check / crash-symbol hosts (GHSA-mjwr-9w29-jp96).
+    DWORD flags = INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_RELOAD;
+
+    if (str::StartsWithI(urlA, StrL("https"))) {
+        flags |= INTERNET_FLAG_SECURE;
+    }
+
+    rspOut->error = ERROR_SUCCESS;
+    if (!OpenHttpRequest(urlA, flags, &hInet, &hReq, &rspOut->httpStatusCode)) {
+        LogLastError();
+        goto Error;
+    }
+
+    for (;;) {
+        char buf[1024];
+        DWORD dwRead = 0;
+        if (!InternetReadFile(hReq, buf, sizeof(buf), &dwRead)) {
+            logf("HttpGet: InternetReadFile failed\n");
+            LogLastError();
+            goto Error;
+        }
+        if (0 == dwRead) {
+            break;
+        }
+        AtomicIntInc(&gAllowAllocFailure);
+        bool ok = rspOut->data.Append(Str(buf, (int)dwRead));
+        AtomicIntDec(&gAllowAllocFailure);
+        if (!ok) {
+            logf("HttpGet: data.Append failed\n");
+            goto Error;
+        }
+    }
+
+Exit:
+    if (hReq) {
+        InternetCloseHandle(hReq);
+    }
+    if (hInet) {
+        InternetCloseHandle(hInet);
+    }
+    return IsHttpRspOk(rspOut);
+
+Error:
+    rspOut->error = GetLastError();
+    if (0 == rspOut->error) {
+        rspOut->error = ERROR_GEN_FAILURE;
+    }
+    goto Exit;
+}
+
+constexpr const int kBufSize = 256 * 1024;
+
+// Download content of a url to a file
+bool HttpGetToFile(Str urlA, Str destFilePath, const Func1<HttpProgress*>& cbProgress, i64 maxSize) {
+    logf("HttpGetToFile: url: '%s', file: '%s'\n", urlA, destFilePath);
+    bool ok = false;
+    HINTERNET hReq = nullptr, hInet = nullptr;
+    DWORD dwRead = 0;
+    DWORD statusCode = 0;
+    char* buf = nullptr;
+
+    HttpProgress progress{};
+
+    WCHAR* pathW = CWStrTemp(destFilePath);
+    HANDLE hf =
+        CreateFileW(pathW, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (INVALID_HANDLE_VALUE == hf) {
+        logf("HttpGetToFile: CreateFileW('%s') failed\n", destFilePath);
+        LogLastError();
+        goto Exit;
+    }
+
+    buf = AllocArray<char>(kBufSize);
+    if (!buf) {
+        goto Exit;
+    }
+
+    if (!OpenHttpRequest(urlA, 0, &hInet, &hReq, &statusCode) || statusCode != 200) {
+        goto Exit;
+    }
+
+    for (;;) {
+        if (!InternetReadFile(hReq, buf, kBufSize, &dwRead)) {
+            goto Exit;
+        }
+        if (dwRead == 0) {
+            break;
+        }
+        if (maxSize >= 0 && progress.nDownloaded > maxSize - (i64)dwRead) {
+            goto Exit;
+        }
+        DWORD size;
+        BOOL wroteOk = WriteFile(hf, buf, dwRead, &size, nullptr);
+        if (!wroteOk) {
+            goto Exit;
+        }
+        progress.nDownloaded += (i64)dwRead;
+        cbProgress.Call(&progress);
+
+        if (size != dwRead) {
+            goto Exit;
+        }
+    }
+
+    ok = true;
+Exit:
+    CloseHandle(hf);
+    if (hReq) {
+        InternetCloseHandle(hReq);
+    }
+    if (hInet) {
+        InternetCloseHandle(hInet);
+    }
+    if (!ok) {
+        file::Delete(destFilePath);
+    }
+    free(buf);
+    return ok;
+}
+
+#endif // OS_WIN
+
+//--- URL encoding
+
+// URL-encode s so it can be substituted into a URL, shortening it if the
+// encoded form would not fit in maxEncodedLen characters.
+TempStr URLEncodeMayTruncateTemp(Str s, int maxEncodedLen, bool* didTruncateOut) {
+    if (maxEncodedLen <= 0) {
+        maxEncodedLen = kMaxUrlEncodedLen;
+    }
+    return url::EncodeMayTruncateTemp(s, maxEncodedLen, didTruncateOut);
+}
+
+//--- POST with custom headers (WinHTTP)
+
+// Splits "Name: value\nName2: value2" into the CRLF-separated form http wants.
+// Also accepts a literal backslash-n: a value that came from a settings file is
+// a single line, so that is how a user writes a separator there.
+TempStr HttpNormalizeHeadersTemp(Str headers) {
+    if (str::IsEmptyOrWhiteSpace(headers)) {
+        return {};
+    }
+    TempStr normalized = str::ReplaceTemp(headers, StrL("\\n"), StrL("\n"));
+    str::Builder b;
+    StrVec lines;
+    Split(&lines, normalized, StrL("\n"), true);
+    for (Str line : lines) {
+        Str t = str::DupTemp(line);
+        str::TrimWSInPlace(t, str::TrimOpt::Both);
+        if (str::IsEmptyOrWhiteSpace(t) || !str::Contains(t, StrL(":"))) {
+            continue;
+        }
+        if (len(b) > 0) {
+            b.Append(StrL("\r\n"));
+        }
+        b.Append(t);
+    }
+    return ToStrTemp(b);
+}
+
+#if OS_WIN
+
+// POST body to url with an explicit Content-Type and optional extra headers.
+// Blocking, so call it off the ui thread. Returns true on a 2xx; rspOut always
+// carries the status code, the body and the win32 error.
+//
+// Uses WinHTTP rather than the WinINet the rest of this file uses: WinINet
+// shares Internet Explorer's cookie jar, so a request would carry whatever
+// cookies happen to be lying around to a third-party endpoint. For a call meant
+// to be authenticated only by an explicit api key that's a privacy leak.
+// blocking; extraHeaders is "Name: value" per line (\n or \r\n separated)
+bool HttpPostUrl(Str url, Str contentType, Str extraHeaders, Str body, HttpRsp* rspOut) {
+    bool ok = false;
+    DWORD sc = 0;
+    HINTERNET hSession = nullptr, hConnect = nullptr, hRequest = nullptr;
+    rspOut->error = ERROR_SUCCESS;
+
+    // InternetCrackUrl (WinINet) rather than WinHttpCrackUrl: same URL_COMPONENTS
+    URL_COMPONENTS uc{};
+    uc.dwStructSize = sizeof(uc);
+    uc.dwSchemeLength = (DWORD)-1;
+    uc.dwHostNameLength = (DWORD)-1;
+    uc.dwUrlPathLength = (DWORD)-1;
+    uc.dwExtraInfoLength = (DWORD)-1;
+    WCHAR* urlW = CWStrTemp(url);
+    if (!InternetCrackUrlW(urlW, 0, 0, &uc)) {
+        rspOut->error = GetLastError();
+        return false;
+    }
+
+    {
+        TempWStr host = str::DupTemp(WStr(uc.lpszHostName, (int)uc.dwHostNameLength));
+        TempWStr pathAndQuery = str::DupTemp(WStr(uc.lpszUrlPath, (int)(uc.dwUrlPathLength + uc.dwExtraInfoLength)));
+
+        hSession = WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!hSession) {
+            rspOut->error = GetLastError();
+            goto Exit2;
+        }
+        hConnect = WinHttpConnect(hSession, host.s, (INTERNET_PORT)uc.nPort, 0);
+        if (!hConnect) {
+            rspOut->error = GetLastError();
+            goto Exit2;
+        }
+        DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        hRequest = WinHttpOpenRequest(hConnect, L"POST", pathAndQuery.s, nullptr, WINHTTP_NO_REFERER,
+                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!hRequest) {
+            rspOut->error = GetLastError();
+            goto Exit2;
+        }
+
+        str::Builder hdrs;
+        if (!str::IsEmptyOrWhiteSpace(contentType)) {
+            hdrs.Append(fmt("Content-Type: %s", contentType));
+        }
+        TempStr extra = HttpNormalizeHeadersTemp(extraHeaders);
+        if (!str::IsEmptyOrWhiteSpace(extra)) {
+            if (len(hdrs) > 0) {
+                hdrs.Append(StrL("\r\n"));
+            }
+            hdrs.Append(extra);
+        }
+        TempWStr hdrsW = ToWStrTemp(ToStr(hdrs));
+
+        BOOL sent =
+            WinHttpSendRequest(hRequest, hdrsW.s, (DWORD)-1, (void*)body.s, (DWORD)len(body), (DWORD)len(body), 0);
+        if (!sent || !WinHttpReceiveResponse(hRequest, nullptr)) {
+            rspOut->error = GetLastError();
+            goto Exit2;
+        }
+
+        DWORD scSize = sizeof(sc);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &sc, &scSize, WINHTTP_NO_HEADER_INDEX);
+        rspOut->httpStatusCode = sc;
+
+        for (;;) {
+            DWORD avail = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &avail) || avail == 0) {
+                break;
+            }
+            char* buf = AllocArrayTemp<char>((int)avail + 1);
+            DWORD read = 0;
+            if (!WinHttpReadData(hRequest, buf, avail, &read) || read == 0) {
+                break;
+            }
+            rspOut->data.Append(Str(buf, (int)read));
+            // a runaway response shouldn't eat memory; callers only show a snippet
+            if (len(rspOut->data) > 1024 * 1024) {
+                break;
+            }
+        }
+        ok = sc >= 200 && sc < 300;
+    }
+
+Exit2:
+    if (hRequest) {
+        WinHttpCloseHandle(hRequest);
+    }
+    if (hConnect) {
+        WinHttpCloseHandle(hConnect);
+    }
+    if (hSession) {
+        WinHttpCloseHandle(hSession);
+    }
+    return ok;
+}
+
+// A 3xx is an error; redirects are not followed.
+bool HttpPostUrlNoRedirect(Str url, Str contentType, Str extraHeaders, Str body, HttpRsp* rspOut) {
+    bool ok = false;
+    DWORD sc = 0;
+    HINTERNET hSession = nullptr, hConnect = nullptr, hRequest = nullptr;
+    rspOut->error = ERROR_SUCCESS;
+    rspOut->httpStatusCode = (DWORD)-1;
+
+    if (!OnlineURLAllowed(url)) {
+        rspOut->error = ERROR_INVALID_PARAMETER;
+        logf("HttpPostUrlNoRedirect: url: '%s' status: %d\n", url, -1);
+        return false;
+    }
+
+    URL_COMPONENTS uc{};
+    uc.dwStructSize = sizeof(uc);
+    uc.dwSchemeLength = (DWORD)-1;
+    uc.dwHostNameLength = (DWORD)-1;
+    uc.dwUrlPathLength = (DWORD)-1;
+    uc.dwExtraInfoLength = (DWORD)-1;
+    WCHAR* urlW = CWStrTemp(url);
+    if (!InternetCrackUrlW(urlW, 0, 0, &uc)) {
+        rspOut->error = GetLastError();
+        logf("HttpPostUrlNoRedirect: url: '%s' status: %d\n", url, -1);
+        return false;
+    }
+
+    {
+        int pathLen = (uc.dwUrlPathLength == (DWORD)-1) ? 0 : (int)uc.dwUrlPathLength;
+        int extraLen = (uc.dwExtraInfoLength == (DWORD)-1) ? 0 : (int)uc.dwExtraInfoLength;
+        TempWStr host = str::DupTemp(WStr(uc.lpszHostName, (int)uc.dwHostNameLength));
+        TempWStr pathAndQuery = str::DupTemp(WStr(uc.lpszUrlPath, pathLen + extraLen));
+        if (len(pathAndQuery) == 0) {
+            pathAndQuery = str::DupTemp(WStrL(L"/"));
+        }
+
+        hSession = WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!hSession) {
+            rspOut->error = GetLastError();
+            goto ExitPost;
+        }
+        hConnect = WinHttpConnect(hSession, host.s, (INTERNET_PORT)uc.nPort, 0);
+        if (!hConnect) {
+            rspOut->error = GetLastError();
+            goto ExitPost;
+        }
+        DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        hRequest = WinHttpOpenRequest(hConnect, L"POST", pathAndQuery.s, nullptr, WINHTTP_NO_REFERER,
+                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!hRequest) {
+            rspOut->error = GetLastError();
+            goto ExitPost;
+        }
+
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy))) {
+            rspOut->error = GetLastError();
+            goto ExitPost;
+        }
+
+        str::Builder hdrs;
+        if (!str::IsEmptyOrWhiteSpace(contentType)) {
+            hdrs.Append(fmt("Content-Type: %s", contentType));
+        }
+        TempStr extra = HttpNormalizeHeadersTemp(extraHeaders);
+        if (!str::IsEmptyOrWhiteSpace(extra)) {
+            if (len(hdrs) > 0) {
+                hdrs.Append(StrL("\r\n"));
+            }
+            hdrs.Append(extra);
+        }
+        TempWStr hdrsW = ToWStrTemp(ToStr(hdrs));
+
+        BOOL sent =
+            WinHttpSendRequest(hRequest, hdrsW.s, (DWORD)-1, (void*)body.s, (DWORD)len(body), (DWORD)len(body), 0);
+        if (!sent || !WinHttpReceiveResponse(hRequest, nullptr)) {
+            rspOut->error = GetLastError();
+            goto ExitPost;
+        }
+
+        DWORD scSize = sizeof(sc);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &sc, &scSize, WINHTTP_NO_HEADER_INDEX);
+        rspOut->httpStatusCode = sc;
+
+        for (;;) {
+            DWORD avail = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &avail) || avail == 0) {
+                break;
+            }
+            char* buf = AllocArrayTemp<char>((int)avail + 1);
+            DWORD read = 0;
+            if (!WinHttpReadData(hRequest, buf, avail, &read) || read == 0) {
+                break;
+            }
+            rspOut->data.Append(Str(buf, (int)read));
+            if (len(rspOut->data) > 1024 * 1024) {
+                break;
+            }
+        }
+        ok = sc >= 200 && sc < 300;
+    }
+
+ExitPost:
+    logf("HttpPostUrlNoRedirect: url: '%s' status: %d\n", url, (int)rspOut->httpStatusCode);
+    if (hRequest) {
+        WinHttpCloseHandle(hRequest);
+    }
+    if (hConnect) {
+        WinHttpCloseHandle(hConnect);
+    }
+    if (hSession) {
+        WinHttpCloseHandle(hSession);
+    }
+    return ok;
+}
+
+// Scheme, host, and port. A prefix of the production host is a different host.
+bool OnlineURLAllowed(Str url) {
+    if (len(url) == 0) {
+        return false;
+    }
+    URL_COMPONENTS uc{};
+    uc.dwStructSize = sizeof(uc);
+    uc.dwSchemeLength = (DWORD)-1;
+    uc.dwHostNameLength = (DWORD)-1;
+    uc.dwUserNameLength = (DWORD)-1;
+    uc.dwPasswordLength = (DWORD)-1;
+    uc.dwUrlPathLength = (DWORD)-1;
+    uc.dwExtraInfoLength = (DWORD)-1;
+    if (!InternetCrackUrlW(CWStrTemp(url), 0, 0, &uc)) {
+        return false;
+    }
+    if (!uc.lpszHostName || uc.dwHostNameLength == 0 || uc.dwHostNameLength == (DWORD)-1 || uc.dwHostNameLength > 253) {
+        return false;
+    }
+    // length left at (DWORD)-1 means that component was absent
+    bool user = uc.dwUserNameLength != 0 && uc.dwUserNameLength != (DWORD)-1;
+    bool pass = uc.dwPasswordLength != 0 && uc.dwPasswordLength != (DWORD)-1;
+    if (user || pass) {
+        return false;
+    }
+    WStr host(uc.lpszHostName, (int)uc.dwHostNameLength);
+    if (uc.nScheme == INTERNET_SCHEME_HTTPS && uc.nPort == 443 && wstr::EqI(host, WStrL(L"web.sumatrapdfreader.org"))) {
+        return true;
+    }
+    if (uc.nScheme == INTERNET_SCHEME_HTTP && uc.nPort == 9332 &&
+        (wstr::EqI(host, WStrL(L"localhost")) || wstr::EqI(host, WStrL(L"127.0.0.1")))) {
+        return true;
+    }
+    return false;
+}
+
+// The list / key check. Blocks; call it off the UI thread. Keeps at most 1 MiB
+// of body and does not follow redirects. Logs the URL and the status only, so
+// the URL must not contain the key. A rejected URL never reaches WinHttpOpen.
+constexpr int kHttpMemBodyCap = 1024 * 1024;
+
+bool HttpGetWithHeaders(Str url, Str extraHeaders, HttpRsp* rspOut) {
+    bool ok = false;
+    HINTERNET hSession = nullptr;
+    HINTERNET hConnect = nullptr;
+    HINTERNET hRequest = nullptr;
+    rspOut->error = ERROR_SUCCESS;
+    rspOut->httpStatusCode = (DWORD)-1;
+
+    if (!OnlineURLAllowed(url)) {
+        rspOut->error = ERROR_INVALID_PARAMETER;
+        logf("HttpGetWithHeaders: url: '%s' status: %d\n", url, -1);
+        return false;
+    }
+
+    URL_COMPONENTS uc{};
+    uc.dwStructSize = sizeof(uc);
+    uc.dwSchemeLength = (DWORD)-1;
+    uc.dwHostNameLength = (DWORD)-1;
+    uc.dwUrlPathLength = (DWORD)-1;
+    uc.dwExtraInfoLength = (DWORD)-1;
+    if (!InternetCrackUrlW(CWStrTemp(url), 0, 0, &uc)) {
+        rspOut->error = GetLastError();
+        logf("HttpGetWithHeaders: url: '%s' status: %d\n", url, -1);
+        return false;
+    }
+
+    {
+        int pathLen = (uc.dwUrlPathLength == (DWORD)-1) ? 0 : (int)uc.dwUrlPathLength;
+        int extraLen = (uc.dwExtraInfoLength == (DWORD)-1) ? 0 : (int)uc.dwExtraInfoLength;
+        TempWStr host = str::DupTemp(WStr(uc.lpszHostName, (int)uc.dwHostNameLength));
+        TempWStr pathAndQuery = str::DupTemp(WStr(uc.lpszUrlPath, pathLen + extraLen));
+        if (len(pathAndQuery) == 0) {
+            pathAndQuery = str::DupTemp(WStrL(L"/"));
+        }
+
+        hSession = WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!hSession) {
+            rspOut->error = GetLastError();
+            goto ExitGet;
+        }
+        hConnect = WinHttpConnect(hSession, host.s, (INTERNET_PORT)uc.nPort, 0);
+        if (!hConnect) {
+            rspOut->error = GetLastError();
+            goto ExitGet;
+        }
+        DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        hRequest = WinHttpOpenRequest(hConnect, L"GET", pathAndQuery.s, nullptr, WINHTTP_NO_REFERER,
+                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!hRequest) {
+            rspOut->error = GetLastError();
+            goto ExitGet;
+        }
+
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy))) {
+            rspOut->error = GetLastError();
+            goto ExitGet;
+        }
+
+        TempStr extra = HttpNormalizeHeadersTemp(extraHeaders);
+        TempWStr hdrsW;
+        LPCWSTR hdrs = WINHTTP_NO_ADDITIONAL_HEADERS;
+        if (!str::IsEmptyOrWhiteSpace(extra)) {
+            hdrsW = ToWStrTemp(extra);
+            hdrs = hdrsW.s;
+        }
+
+        BOOL sent = WinHttpSendRequest(hRequest, hdrs, (DWORD)-1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+        if (!sent || !WinHttpReceiveResponse(hRequest, nullptr)) {
+            rspOut->error = GetLastError();
+            goto ExitGet;
+        }
+
+        DWORD sc = 0;
+        DWORD scSize = sizeof(sc);
+        if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                 WINHTTP_HEADER_NAME_BY_INDEX, &sc, &scSize, WINHTTP_NO_HEADER_INDEX)) {
+            rspOut->error = GetLastError();
+            goto ExitGet;
+        }
+        rspOut->httpStatusCode = sc;
+
+        for (;;) {
+            int room = kHttpMemBodyCap - len(rspOut->data);
+            if (room <= 0) {
+                break;
+            }
+            DWORD avail = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &avail) || avail == 0) {
+                break;
+            }
+            if ((int)avail > room) {
+                avail = (DWORD)room;
+            }
+            char* buf = AllocArrayTemp<char>((int)avail + 1);
+            DWORD read = 0;
+            if (!WinHttpReadData(hRequest, buf, avail, &read) || read == 0) {
+                break;
+            }
+            rspOut->data.Append(Str(buf, (int)read));
+        }
+        ok = sc == 200;
+    }
+
+ExitGet:
+    logf("HttpGetWithHeaders: url: '%s' status: %d\n", url, (int)rspOut->httpStatusCode);
+    if (hRequest) {
+        WinHttpCloseHandle(hRequest);
+    }
+    if (hConnect) {
+        WinHttpCloseHandle(hConnect);
+    }
+    if (hSession) {
+        WinHttpCloseHandle(hSession);
+    }
+    return ok;
+}
+
+// Desktop cap. The website still stores up to 200 MiB; a partial file over
+// this limit is deleted so it cannot be opened as a document.
+constexpr i64 kHttpDownloadMaxBytes = (i64)50 << 20;
+
+static bool WriteAllBytes(HANDLE h, const void* data, DWORD n) {
+    const char* p = (const char*)data;
+    while (n > 0) {
+        DWORD wrote = 0;
+        if (!WriteFile(h, p, n, &wrote, nullptr) || wrote == 0) {
+            return false;
+        }
+        p += wrote;
+        n -= wrote;
+    }
+    return true;
+}
+
+// Does not follow redirects. A body over 50 MiB deletes the partial file.
+bool HttpDownloadWithHeaders(Str url, Str extraHeaders, Str destPath, HttpRsp* rspOut) {
+    bool ok = false;
+    bool created = false;
+    TempStr partPath;
+    HINTERNET hSession = nullptr;
+    HINTERNET hConnect = nullptr;
+    HINTERNET hRequest = nullptr;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    rspOut->error = ERROR_SUCCESS;
+    rspOut->httpStatusCode = (DWORD)-1;
+
+    if (!OnlineURLAllowed(url)) {
+        rspOut->error = ERROR_INVALID_PARAMETER;
+        logf("HttpDownloadWithHeaders: url: '%s' status: %d\n", url, -1);
+        return false;
+    }
+
+    URL_COMPONENTS uc{};
+    uc.dwStructSize = sizeof(uc);
+    uc.dwSchemeLength = (DWORD)-1;
+    uc.dwHostNameLength = (DWORD)-1;
+    uc.dwUrlPathLength = (DWORD)-1;
+    uc.dwExtraInfoLength = (DWORD)-1;
+    if (!InternetCrackUrlW(CWStrTemp(url), 0, 0, &uc)) {
+        rspOut->error = GetLastError();
+        logf("HttpDownloadWithHeaders: url: '%s' status: %d\n", url, -1);
+        return false;
+    }
+
+    {
+        int pathLen = (uc.dwUrlPathLength == (DWORD)-1) ? 0 : (int)uc.dwUrlPathLength;
+        int extraLen = (uc.dwExtraInfoLength == (DWORD)-1) ? 0 : (int)uc.dwExtraInfoLength;
+        TempWStr host = str::DupTemp(WStr(uc.lpszHostName, (int)uc.dwHostNameLength));
+        TempWStr pathAndQuery = str::DupTemp(WStr(uc.lpszUrlPath, pathLen + extraLen));
+        if (len(pathAndQuery) == 0) {
+            pathAndQuery = str::DupTemp(WStrL(L"/"));
+        }
+
+        hSession = WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!hSession) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+        hConnect = WinHttpConnect(hSession, host.s, (INTERNET_PORT)uc.nPort, 0);
+        if (!hConnect) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+        DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        hRequest = WinHttpOpenRequest(hConnect, L"GET", pathAndQuery.s, nullptr, WINHTTP_NO_REFERER,
+                                      WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!hRequest) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy))) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+
+        TempStr extra = HttpNormalizeHeadersTemp(extraHeaders);
+        TempWStr hdrsW;
+        LPCWSTR hdrs = WINHTTP_NO_ADDITIONAL_HEADERS;
+        if (!str::IsEmptyOrWhiteSpace(extra)) {
+            hdrsW = ToWStrTemp(extra);
+            hdrs = hdrsW.s;
+        }
+
+        BOOL sent = WinHttpSendRequest(hRequest, hdrs, (DWORD)-1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+        if (!sent || !WinHttpReceiveResponse(hRequest, nullptr)) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+
+        DWORD sc = 0;
+        DWORD scSize = sizeof(sc);
+        if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                 WINHTTP_HEADER_NAME_BY_INDEX, &sc, &scSize, WINHTTP_NO_HEADER_INDEX)) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+        rspOut->httpStatusCode = sc;
+        // a 3xx is not followed; it is not a file
+        if (sc != 200) {
+            goto ExitDl;
+        }
+
+        DWORD contentLen = 0;
+        DWORD clSize = sizeof(contentLen);
+        if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                                WINHTTP_HEADER_NAME_BY_INDEX, &contentLen, &clSize, WINHTTP_NO_HEADER_INDEX)) {
+            if ((i64)contentLen > kHttpDownloadMaxBytes) {
+                rspOut->error = ERROR_FILE_TOO_LARGE;
+                goto ExitDl;
+            }
+        }
+
+        // A failed transfer must not truncate the last good copy of destPath.
+        partPath = str::JoinTemp(destPath, StrL(".part"));
+        hFile = CreateFileW(CWStrTemp(partPath), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            rspOut->error = GetLastError();
+            goto ExitDl;
+        }
+        created = true;
+
+        i64 got = 0;
+        char buf[32 * 1024];
+        for (;;) {
+            DWORD avail = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &avail)) {
+                rspOut->error = GetLastError();
+                goto ExitDl;
+            }
+            if (avail == 0) {
+                break;
+            }
+            DWORD want = avail;
+            if (want > sizeof(buf)) {
+                want = (DWORD)sizeof(buf);
+            }
+            DWORD read = 0;
+            if (!WinHttpReadData(hRequest, buf, want, &read)) {
+                rspOut->error = GetLastError();
+                goto ExitDl;
+            }
+            if (read == 0) {
+                break;
+            }
+            if (got + (i64)read > kHttpDownloadMaxBytes) {
+                rspOut->error = ERROR_FILE_TOO_LARGE;
+                goto ExitDl;
+            }
+            if (!WriteAllBytes(hFile, buf, read)) {
+                rspOut->error = GetLastError();
+                goto ExitDl;
+            }
+            got += (i64)read;
+        }
+        ok = true;
+    }
+
+ExitDl:
+    logf("HttpDownloadWithHeaders: url: '%s' status: %d\n", url, (int)rspOut->httpStatusCode);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        CloseHandle(hFile);
+        hFile = INVALID_HANDLE_VALUE;
+    }
+    if (ok && !file::RenameReplace(destPath, partPath)) {
+        DWORD err = GetLastError();
+        rspOut->error = err != 0 ? err : (DWORD)ERROR_GEN_FAILURE;
+        ok = false;
+    }
+    if (created && !ok) {
+        file::Delete(partPath);
+    }
+    if (hRequest) {
+        WinHttpCloseHandle(hRequest);
+    }
+    if (hConnect) {
+        WinHttpCloseHandle(hConnect);
+    }
+    if (hSession) {
+        WinHttpCloseHandle(hSession);
+    }
+    return ok;
+}
+
+#endif
+
+#if OS_WIN
+bool HttpRequestStream(Str method, Str url, Str headers, Str body, HttpStreamSink* sink, HttpStreamCancel* cancel) {
+    bool get = str::Eq(method, StrL("GET"));
+    if ((!get && !str::Eq(method, StrL("POST"))) || !sink || !cancel) return false;
+    URL_COMPONENTS parts{};
+    parts.dwStructSize = sizeof(parts);
+    parts.dwSchemeLength = parts.dwHostNameLength = parts.dwUrlPathLength = parts.dwExtraInfoLength = (DWORD)-1;
+    parts.dwUserNameLength = parts.dwPasswordLength = (DWORD)-1;
+    TempWStr wide = ToWStrTemp(url);
+    if (!InternetCrackUrlW(wide.s, 0, 0, &parts) || sink->IsCanceled()) return false;
+    bool user = parts.dwUserNameLength != 0 && parts.dwUserNameLength != (DWORD)-1;
+    bool password = parts.dwPasswordLength != 0 && parts.dwPasswordLength != (DWORD)-1;
+    if ((parts.nScheme != INTERNET_SCHEME_HTTP && parts.nScheme != INTERNET_SCHEME_HTTPS) || user || password ||
+        !parts.lpszHostName || parts.dwHostNameLength == 0 || parts.dwHostNameLength == (DWORD)-1)
+        return false;
+    TempWStr host = str::DupTemp(WStr(parts.lpszHostName, (int)parts.dwHostNameLength));
+    wstr::Builder path;
+    if (parts.dwUrlPathLength != 0 && parts.dwUrlPathLength != (DWORD)-1) {
+        path.Append(WStr(parts.lpszUrlPath, (int)parts.dwUrlPathLength));
+    } else {
+        path.Append(WStrL(L"/"));
+    }
+    if (parts.dwExtraInfoLength != 0 && parts.dwExtraInfoLength != (DWORD)-1) {
+        path.Append(WStr(parts.lpszExtraInfo, (int)parts.dwExtraInfoLength));
+    }
+    HINTERNET session =
+        WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!session) return false;
+    HINTERNET connect = WinHttpConnect(session, host.s, parts.nPort, 0);
+    DWORD flags = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET request = connect ? WinHttpOpenRequest(connect, get ? L"GET" : L"POST", ToWStr(path).s, nullptr,
+                                                     WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags)
+                                : nullptr;
+    bool ok = false;
+    if (request) {
+        AtomicPtrExchange(&cancel->request, request);
+        if (cancel->IsCanceled()) cancel->Cancel();
+        constexpr int kConnectTimeoutMs = 30000;
+        constexpr int kStreamTimeoutMs = 180000;
+        WinHttpSetTimeouts(request, kConnectTimeoutMs, kConnectTimeoutMs, kConnectTimeoutMs, kStreamTimeoutMs);
+        DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_NEVER;
+        TempWStr wideHeaders = ToWStrTemp(headers);
+        if (WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &policy, sizeof(policy)) &&
+            WinHttpSendRequest(request, wideHeaders.s, (DWORD)len(wideHeaders),
+                               get ? WINHTTP_NO_REQUEST_DATA : (void*)body.s, get ? 0 : (DWORD)len(body),
+                               get ? 0 : (DWORD)len(body), 0) &&
+            WinHttpReceiveResponse(request, nullptr)) {
+            DWORD status = 0, size = sizeof(status);
+            if (WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                    WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX)) {
+                sink->OnStatus((int)status);
+                char bytes[4096];
+                while (!sink->IsCanceled()) {
+                    // Read only buffered bytes so a small SSE chunk is delivered immediately.
+                    DWORD available = 0;
+                    if (!WinHttpQueryDataAvailable(request, &available)) break;
+                    if (available == 0) {
+                        ok = true;
+                        break;
+                    }
+                    DWORD want = available > sizeof(bytes) ? (DWORD)sizeof(bytes) : available;
+                    DWORD received = 0;
+                    if (!WinHttpReadData(request, bytes, want, &received)) break;
+                    if (received == 0) {
+                        ok = true;
+                        break;
+                    }
+                    if (!sink->OnData(Str(bytes, (int)received))) break;
+                }
+            }
+        }
+        HINTERNET live = (HINTERNET)AtomicPtrExchange(&cancel->request, nullptr);
+        if (live) WinHttpCloseHandle(live);
+    }
+    if (connect) WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+    return ok && !sink->IsCanceled();
+}
+
+bool HttpPostStream(Str url, Str headers, Str body, HttpStreamSink* sink, HttpStreamCancel* cancel) {
+    return HttpRequestStream(StrL("POST"), url, headers, body, sink, cancel);
+}
+#endif
+
+void HttpStreamCancel::Cancel() {
+    AtomicBoolSet(&canceled, true);
+#if OS_WIN
+    HINTERNET live = (HINTERNET)AtomicPtrExchange(&request, nullptr);
+    if (live) WinHttpCloseHandle(live);
+#endif
+}
+
+bool HttpStreamCancel::IsCanceled() {
+    return AtomicBoolGet(&canceled);
+}

@@ -1,0 +1,144 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+
+struct MainWindow;
+struct WindowTab;
+struct VirtButton;
+struct VirtListBox;
+struct Edit;
+struct Gfx;
+struct Checkbox;
+struct PlatformFont;
+struct WindowBase;
+enum class VirtButtonStyle;
+
+void ShowAddFavoriteDialog(MainWindow* win, Str filePath, int pageNo, Str pageLabel, Str name);
+void ShowEditFavoritesDialog(MainWindow* win);
+void ShowAdvancedSettingsDialog(MainWindow* win);
+void ShowConfigureRestrictedUseDialog(MainWindow* win);
+void OpenSettingsFileInEditor();
+TempStr AdvSettingsRowsResultTemp(Str action, int arg, int* exitCodeOut);
+void ShowChangeBackgroundColorDialog(MainWindow* win);
+void ShowChangeLanguageDialog(MainWindow* win);
+void ShowChangeScrollbarDialog(MainWindow* win);
+void ShowChangeThemeDialog(MainWindow* win);
+void ShowSetDocumentColorsFollowThemeDialog(MainWindow* win);
+
+// generic color picker: picks a color and edits the set of predefined colors
+struct ChangeColorsArgs {
+    MainWindow* win = nullptr;
+    Str title;
+    // in: initially picked color, out: the color the user picked
+    Color color = kColorUnset;
+    // in: predefined colors, out: the set as the user left it
+    Vec<Color> colors;
+    // false if the user cancelled, in which case color is meaningless
+    bool didSelect = false;
+    // true if the user added or removed a color
+    bool colorsChanged = false;
+    // show a slider that sets the color's alpha byte
+    bool withOpacity = false;
+    // called once, when the dialog closes; args are deleted afterwards
+    Func1<ChangeColorsArgs*> onClose;
+};
+// takes ownership of args
+void ShowChangeColorsDialog(ChangeColorsArgs* args);
+
+void ShowSetTabColorDialog(MainWindow* win, WindowTab* tab);
+void ShowCustomZoomDialog(MainWindow* win);
+void ShowPageGridDialog(MainWindow* win);
+void ResetPageGridToDefaults();
+TempStr PageGridStateTemp();
+void ShowSignDocumentDialog(MainWindow* win, Str fieldName = {}, bool hasField = false, int certifyLevel = 0);
+bool IsPlacingSignature(MainWindow* win);
+bool CancelPlacingSignature(MainWindow* win);
+void CloseSignDocumentDialog(MainWindow* win);
+bool FinishSignaturePlacement(MainWindow* win, int x, int y, bool aborted);
+void ShowEbookSettingsDialog(MainWindow* win);
+Str ShowGetPasswordDialog(HWND hwndParent, Str fileName, bool* rememberPassword, bool* showPassword);
+void ShowGoToPageDialog(MainWindow* win);
+void ShowInverseSearchDialog(MainWindow* win);
+void ShowSumatraPDFWebDialog(MainWindow* win);
+void ShowSettingsDialog(MainWindow* win);
+
+enum class PrintRangeAdv {
+    All = 0,
+    Even,
+    Odd
+};
+enum class PrintScaleAdv {
+    None = 0,
+    Shrink,
+    Fit,
+    Stretch
+};
+enum class PrintRotationAdv {
+    Auto = 0,
+    Portrait,
+    Landscape
+};
+
+struct Print_Advanced_Data {
+    PrintRangeAdv range;
+    PrintScaleAdv scale;
+    PrintRotationAdv rotation;
+    bool autoRotate;
+    bool centerHorizontally;
+    // when true, let the printer pick the input tray whose paper matches the
+    // document's page size (DMBIN_FORMSOURCE), independent of page scaling
+    bool paperSourceByPageSize;
+    // when true, set the paper size to each page's own size before printing it,
+    // so mixed page size documents print to the right paper/tray
+    bool perPagePaperSize;
+    // extra rotation applied to the printout, in degrees (0, 90, 180 or 270),
+    // on top of the automatic rotation; lets the user fix wrong orientation
+    // (e.g. upside-down output on virtual printers), issue #1246
+    int extraRotation;
+    // when > 0, the document's resolution to assume instead of what the file
+    // says: 1:1 printing of a scan depends on its DPI, which images often lack
+    // or have wrong, and image folders / comic books ignore it altogether
+    // (#6223). Set via -print-settings "dpi=<n>" or PrinterDefaults.PrintDpi
+    float dpiOverride = 0;
+
+    explicit Print_Advanced_Data(PrintRangeAdv range = PrintRangeAdv::All, PrintScaleAdv scale = PrintScaleAdv::Shrink,
+                                 PrintRotationAdv rotation = PrintRotationAdv::Auto, bool autoRotate = true,
+                                 bool centerHorizontally = false, bool paperSourceByPageSize = false,
+                                 bool perPagePaperSize = false, int extraRotation = 0)
+        : range(range),
+          scale(scale),
+          rotation(rotation),
+          autoRotate(autoRotate),
+          centerHorizontally(centerHorizontally),
+          paperSourceByPageSize(paperSourceByPageSize),
+          perPagePaperSize(perPagePaperSize),
+          extraRotation(extraRotation) {}
+};
+
+void ShowPDFScriptDialog(MainWindow* win);
+TempStr PDFScriptTestTemp(Str action, int idx, int* exitCodeOut);
+
+// the buttons of the redrawn dialogs: the one action filled with the text
+// color, Cancel outlined, the quiet ones plain words that fill on hover
+using DlgButtonStyle = VirtButtonStyle;
+VirtButton* NewDlgButton(HWND hwndForDpi, Str text, PlatformFont* font, DlgButtonStyle style, bool isDefault);
+// a filled button goes pale while disabled
+void SetDlgButtonEnabled(VirtButton* b, DlgButtonStyle style, bool enabled);
+// the dialogs' UI font at `px`
+PlatformFont* DlgUiFont(int px);
+bool CreateToolDialog(WindowBase* w, HWND owner, Str title, PlatformFont* font, Color txt, Color bg);
+void SizeToLayout(WindowBase* w, ILayout* layout, int minDx, int minDy, HWND centerOn);
+VirtText* NewDlgLabel(Str s, PlatformFont* font, Color col, int dy, bool prefix = false);
+VirtText* NewDlgCaption(Str s, PlatformFont* font, Color col);
+ILayout* NewDlgUnderlined(ILayout* field);
+HBox* NewDlgRow();
+ILayout* NewDlgFooter(VirtButton* cancel, VirtButton* ok, VirtButton* extra = nullptr);
+VirtListBox* NewDlgList(int dpi, PlatformFont* font);
+void SetDlgListColors(VirtListBox* lb);
+ILayout* NewDlgListBox(VirtListBox* lb);
+void DrawDlgListItem(VirtListBox* lb, Gfx* gfx, Rect rc, bool selected, Str text, Str meta);
+Edit* NewDlgEdit(HWND parent, PlatformFont* font, Str text, int idealChars);
+Checkbox* NewDlgCheckbox(HWND parent, Str text, PlatformFont* font, bool checked);
+Checkbox* NewDlgRadio(HWND parent, Str text, PlatformFont* font, bool checked, bool groupStart);
+HBox* NewDlgFieldRow();
+ILayout* NewDlgSection(ILayout* content);
+void AlignDlgLabels(const Vec<VirtText*>& labels);

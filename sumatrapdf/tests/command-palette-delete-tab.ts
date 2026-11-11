@@ -1,0 +1,147 @@
+// Delete on a command-palette tab can CloseTab, which pumps messages
+// (focus change, window teardown). The palette must not use-after-free.
+
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { ControlClient, ControlCommand } from "./control.ts";
+import { IS_MAC } from "./host.ts";
+import { ROOT, cmdId, runStandalone, tmpPath } from "./util.ts";
+import {
+  enumWindows,
+  getClassName,
+  getWindowPid,
+  isWindowVisible,
+  postMessage,
+  sleep,
+  VK_DELETE,
+  VK_DOWN,
+  WM_KEYDOWN,
+} from "./winapi.ts";
+import {
+  FRAME_CLASS,
+  killAndWait,
+  launchControlled,
+  sendCommand,
+  sendCommandSync,
+  waitForPalette,
+  paletteSetText,
+  paletteState,
+  type PaletteState,
+} from "./win-automation.ts";
+const SETTINGS = `UiLanguage = en
+Theme = Light
+CheckForUpdates = false
+RestoreSession = false
+RememberOpenedFiles = false
+`;
+
+async function frameCount(client: ControlClient, pid: number): Promise<number> {
+  if (IS_MAC) {
+    const raw = String((await client.request(ControlCommand.TestUiState, []))[1] ?? "");
+    return Number(/windows=(\d+)/.exec(raw)?.[1] ?? "0");
+  }
+  return getFrames(pid).length;
+}
+
+function getFrames(pid: number): number[] {
+  const res: number[] = [];
+  enumWindows((hwnd) => {
+    if (getWindowPid(hwnd) === pid && getClassName(hwnd) === FRAME_CLASS && isWindowVisible(hwnd)) {
+      res.push(hwnd);
+    }
+    return true;
+  });
+  return res;
+}
+
+async function waitFor(client: ControlClient, what: string, pred: (p: PaletteState) => boolean): Promise<PaletteState> {
+  const deadline = Date.now() + 8000;
+  let last: PaletteState = { open: false, items: 0 };
+  for (;;) {
+    last = await paletteState(client);
+    if (pred(last)) {
+      return last;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`command-palette-delete-tab: ${what}; palette is ${JSON.stringify(last)}`);
+    }
+    await sleep(50);
+  }
+}
+
+export async function testit(): Promise<void> {
+  const dir = tmpPath("command-palette-delete-tab");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SumatraPDF-settings.txt"), SETTINGS);
+
+  const pdf = join(ROOT, "ext", "a-zlib", "zlib.3.pdf");
+  const { proc, client, frame } = await launchControlled(["-appdata", dir, pdf]);
+  try {
+    await client.waitForRenderIdle();
+    sendCommandSync(frame, cmdId("CmdDuplicateInNewWindow"));
+
+    const twoDeadline = Date.now() + 8000;
+    while ((await frameCount(client, proc.pid!)) < 2 && Date.now() < twoDeadline) {
+      await sleep(50);
+    }
+    const opened = await frameCount(client, proc.pid!);
+    if (opened !== 2) {
+      throw new Error(`command-palette-delete-tab: expected 2 frames, got ${opened}`);
+    }
+
+    sendCommand(frame, cmdId("CmdCommandPalette"));
+    const openDeadline = Date.now() + 8000;
+    let handles = { palette: 0, edit: 0 };
+    while (Date.now() < openDeadline) {
+      if (IS_MAC) {
+        if ((await paletteState(client)).open) {
+          handles = { palette: frame, edit: frame };
+          break;
+        }
+      } else {
+        handles = await waitForPalette(client, frame, 50);
+        if (handles.palette && handles.edit) {
+          break;
+        }
+      }
+      await sleep(50);
+    }
+    if (!handles.palette || !handles.edit) {
+      throw new Error("command-palette-delete-tab: palette did not open");
+    }
+
+    await paletteSetText(client, handles, "@");
+    await waitFor(client, "@ did not list 4 tabs", (p) => p.open && p.items === 4);
+
+    // Home, doc, Home, doc — Delete the first window's document
+    postMessage(handles.edit, WM_KEYDOWN, VK_DOWN, 0);
+    postMessage(handles.edit, WM_KEYDOWN, VK_DELETE, 0);
+
+    const closeDeadline = Date.now() + 8000;
+    let nFrames = 2;
+    while (Date.now() < closeDeadline) {
+      try {
+        await client.request(ControlCommand.Ping, []);
+      } catch (e) {
+        throw new Error(`command-palette-delete-tab: process died (${String((e as Error)?.message ?? e)})`);
+      }
+      nFrames = await frameCount(client, proc.pid!);
+      if (nFrames === 1) {
+        break;
+      }
+      await sleep(50);
+    }
+    if (nFrames !== 1) {
+      throw new Error(`command-palette-delete-tab: expected 1 frame after Delete, got ${nFrames}`);
+    }
+    console.log("command-palette-delete-tab: OK");
+  } finally {
+    client.close();
+    await killAndWait(proc);
+  }
+}
+
+if (import.meta.main) {
+  await runStandalone(testit);
+}

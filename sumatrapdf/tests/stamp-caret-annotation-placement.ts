@@ -1,0 +1,269 @@
+// Stamp, caret, and file-attachment annotations from the PDF toolbar or
+// Command Palette enter a placement mode. A ghost of the annotation follows
+// the cursor; canvas-margin clicks do nothing; a page click creates it; Esc
+// cancels.
+
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { ControlClient, ControlCommand } from "./control.ts";
+import { cmdId, runStandalone, SLOW_BUILD_FACTOR, tmpPath, USE_NG, makeBlankPdf } from "./util.ts";
+import {
+  clientToScreen,
+  getClientRect,
+  packCoords,
+  sendMessage,
+  setCursorPos,
+  sleep,
+  VK_ESCAPE,
+  WM_COMMAND,
+  WM_MOUSEMOVE,
+} from "./winapi.ts";
+import {
+  clickAt,
+  findChildByClass,
+  findCanvas,
+  killAndWait,
+  launchControlled,
+  pressKey,
+  paletteRun,
+} from "./win-automation.ts";
+
+type Kind = "stamp" | "caret" | "file";
+
+type PlacementState = {
+  active: boolean;
+  notification: boolean;
+  cursor: boolean;
+  preview: boolean;
+  command: number;
+  annotations: number;
+  message: string;
+  raw: string;
+};
+
+function cmdName(kind: Kind): string {
+  if (kind === "stamp") {
+    return "CmdCreateAnnotStamp";
+  }
+  if (kind === "caret") {
+    return "CmdCreateAnnotCaret";
+  }
+  return "CmdCreateAnnotFileAttachment";
+}
+
+function paletteQuery(kind: Kind): string {
+  if (kind === "stamp") {
+    return ">Create Stamp Annotation";
+  }
+  if (kind === "caret") {
+    return ">Create Caret Annotation";
+  }
+  return ">Create File Attachment Annotation";
+}
+
+function expectedMessage(kind: Kind): string {
+  if (kind === "stamp") {
+    return "Place stamp annotation. **Esc** to cancel.";
+  }
+  if (kind === "caret") {
+    return "Place caret annotation. **Esc** to cancel.";
+  }
+  return "Place file attachment. **Esc** to cancel.";
+}
+
+function dumpKey(kind: Kind): string {
+  if (kind === "stamp") {
+    return "stampPlacement";
+  }
+  if (kind === "caret") {
+    return "caretPlacement";
+  }
+  return "fileAttachmentPlacement";
+}
+
+async function placementState(client: ControlClient, kind: Kind): Promise<PlacementState> {
+  const res = await client.request(ControlCommand.TestMarkupAnnots, []);
+  const raw = String(res[1] ?? "");
+  const count = /annotations=(\d+)/.exec(raw);
+  const key = dumpKey(kind);
+  const state = new RegExp(
+    `${key} active=(\\d+) notification=(\\d+) cursor=(\\d+) preview=(\\d+) cmd=(-?\\d+) message=(.*)`,
+  ).exec(raw);
+  if (res[0] !== 0 || !count || !state) {
+    throw new Error(`stamp-caret-annotation-placement: could not read ${key} state\n${raw}`);
+  }
+  return {
+    active: state[1] === "1",
+    notification: state[2] === "1",
+    cursor: state[3] === "1",
+    preview: state[4] === "1",
+    command: +state[5]!,
+    annotations: +count[1]!,
+    message: state[6]!.trim(),
+    raw,
+  };
+}
+
+async function waitForPlacement(client: ControlClient, kind: Kind, active: boolean): Promise<PlacementState> {
+  const deadline = Date.now() + 5_000;
+  let state: PlacementState;
+  for (;;) {
+    state = await placementState(client, kind);
+    if (state.active === active) {
+      return state;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`stamp-caret-annotation-placement: ${kind} active did not become ${active}\n${state.raw}`);
+    }
+    await sleep(40);
+  }
+}
+
+function toolbarRect(dump: string, kind: Kind): { x: number; y: number; dx: number; dy: number } {
+  const id = cmdId(cmdName(kind));
+  const re = new RegExp(`annotation-idx=\\d+ cmd=${id} hidden=0 enabled=1 rect=(-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+)`);
+  const m = re.exec(dump);
+  if (!m) {
+    throw new Error(`stamp-caret-annotation-placement: ${kind} toolbar button not found\n${dump}`);
+  }
+  const x = +m[1]!;
+  const y = +m[2]!;
+  return { x, y, dx: +m[3]! - x, dy: +m[4]! - y };
+}
+
+async function testKind(
+  client: ControlClient,
+  frame: number,
+  canvas: number,
+  kind: Kind,
+  annotationsBefore: number,
+): Promise<number> {
+  const canvasRect = getClientRect(canvas);
+  const pagePoint = { x: Math.floor(canvasRect.right / 2), y: Math.floor(canvasRect.bottom / 2) };
+  const wantCmd = cmdId(cmdName(kind));
+
+  const buttonDeadline = Date.now() + 5_000 * SLOW_BUILD_FACTOR;
+  let button = { x: 0, y: 0, dx: 0, dy: 0 };
+  let toolbarDump = "";
+  for (;;) {
+    toolbarDump = String((await client.request(ControlCommand.TestToolbarButtons, []))[1] ?? "");
+    try {
+      button = toolbarRect(toolbarDump, kind);
+    } catch {
+      button = { x: 0, y: 0, dx: 0, dy: 0 };
+    }
+    if (button.dx > 0 && button.dy > 0) {
+      break;
+    }
+    if (Date.now() > buttonDeadline) {
+      throw new Error(`stamp-caret-annotation-placement: ${kind} toolbar button not laid out\n${toolbarDump}`);
+    }
+    await sleep(40);
+  }
+  const bx = button.x + Math.floor(button.dx / 2);
+  const by = button.y + Math.floor(button.dy / 2);
+  if (USE_NG) {
+    const res = await client.request(ControlCommand.TestInput, ["click", bx, by, 0, 0]);
+    const raw = String(res[1] ?? "");
+    if (res[0] !== 0 || !raw.startsWith("OK")) {
+      throw new Error(`stamp-caret-annotation-placement: ${kind} toolbar click failed: ${raw}`);
+    }
+  } else {
+    const toolbar = findChildByClass(frame, "SUMATRA_VIRT_TOOLBAR");
+    await clickAt(toolbar, bx, by, 0);
+  }
+
+  let state = await waitForPlacement(client, kind, true);
+  if (!state.notification || state.annotations !== annotationsBefore || state.message !== expectedMessage(kind)) {
+    throw new Error(`stamp-caret-annotation-placement: ${kind} toolbar did not start placement\n${state.raw}`);
+  }
+
+  const screenPoint = clientToScreen(canvas, pagePoint.x, pagePoint.y);
+  // Toolbar and notification cursor queries can overwrite the canvas cursor.
+  const cursorDeadline = Date.now() + 2_000 * SLOW_BUILD_FACTOR;
+  for (;;) {
+    setCursorPos(screenPoint.x, screenPoint.y);
+    sendMessage(canvas, WM_MOUSEMOVE, 0, packCoords(pagePoint.x, pagePoint.y));
+    state = await placementState(client, kind);
+    if ((state.cursor && state.preview) || Date.now() > cursorDeadline) break;
+    await sleep(40);
+  }
+  if (!state.cursor || !state.preview) {
+    throw new Error(`stamp-caret-annotation-placement: ${kind} preview/cursor was not active\n${state.raw}`);
+  }
+
+  await clickAt(canvas, 2, Math.floor(canvasRect.bottom / 2), 0);
+  state = await placementState(client, kind);
+  if (!state.active || state.annotations !== annotationsBefore) {
+    throw new Error(`stamp-caret-annotation-placement: ${kind} click outside the page ended placement\n${state.raw}`);
+  }
+
+  await clickAt(canvas, pagePoint.x, pagePoint.y, 0);
+  state = await waitForPlacement(client, kind, false);
+  if (state.notification || state.annotations !== annotationsBefore + 1) {
+    throw new Error(`stamp-caret-annotation-placement: ${kind} page click did not place one annotation\n${state.raw}`);
+  }
+
+  sendMessage(frame, WM_COMMAND, wantCmd, packCoords(pagePoint.x + 40, pagePoint.y + 40));
+  state = await placementState(client, kind);
+  if (state.active || state.notification || state.annotations !== annotationsBefore + 2) {
+    throw new Error(`stamp-caret-annotation-placement: ${kind} context point did not place immediately\n${state.raw}`);
+  }
+
+  await paletteRun(client, frame, paletteQuery(kind), cmdName(kind));
+  state = await waitForPlacement(client, kind, true);
+  if (!state.notification || state.annotations !== annotationsBefore + 2 || state.command !== wantCmd) {
+    throw new Error(`stamp-caret-annotation-placement: palette did not start ${kind} placement\n${state.raw}`);
+  }
+  await pressKey(frame, VK_ESCAPE, 0);
+  state = await waitForPlacement(client, kind, false);
+  if (state.notification || state.annotations !== annotationsBefore + 2) {
+    throw new Error(`stamp-caret-annotation-placement: Esc did not cancel ${kind} without creating\n${state.raw}`);
+  }
+  return annotationsBefore + 2;
+}
+
+export async function testit(): Promise<void> {
+  const dir = tmpPath("stamp-caret-annotation-placement");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const pdf = join(dir, "blank.pdf");
+  const appdata = join(dir, "appdata");
+  mkdirSync(appdata, { recursive: true });
+  writeFileSync(pdf, makeBlankPdf(), "latin1");
+  writeFileSync(
+    join(appdata, "SumatraPDF-settings.txt"),
+    "UiLanguage = en\nRestoreSession = false\nShowStartPage = false\nCheckForUpdates = false\n",
+  );
+
+  const { proc, client, frame } = await launchControlled([
+    "-appdata",
+    appdata,
+    "-view",
+    "single page",
+    "-zoom",
+    "fit page",
+    pdf,
+  ]);
+  try {
+    await client.waitForRenderIdle();
+    const canvas = findCanvas(frame);
+    sendMessage(frame, WM_COMMAND, cmdId("CmdToggleEditPDF"), 0);
+
+    let n = await testKind(client, frame, canvas, "stamp", 0);
+    n = await testKind(client, frame, canvas, "caret", n);
+    n = await testKind(client, frame, canvas, "file", n);
+    if (n !== 6) {
+      throw new Error(`stamp-caret-annotation-placement: expected 6 annotations, got ${n}`);
+    }
+  } finally {
+    client.close();
+    await killAndWait(proc);
+  }
+
+  console.log("stamp-caret-annotation-placement: OK");
+}
+
+if (import.meta.main) {
+  await runStandalone(testit);
+}

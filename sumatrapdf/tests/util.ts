@@ -1,0 +1,1121 @@
+// Shared helpers for tests/. See agents.md "Writing tests".
+//
+// Each tests/issue-<n>.ts exports `async function testit()` that runs the test
+// and THROWS on failure (returns normally on success). It does NOT build the app
+// or call process.exit -- that's the runner's job, so tests compose in
+// run-almost-all.ts / run-all.ts.
+
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { deflateRawSync, deflateSync, inflateRawSync, inflateSync } from "node:zlib";
+import { IS_MAC, IS_WIN } from "./host.ts";
+import { ensureModifierKeysUp, enumWindows, getWindowPid, getWindowText, hasInteractiveDesktop } from "./winapi.ts";
+
+export const ROOT = join(import.meta.dir, "..");
+
+// `-ng` builds and runs the ng Windows app (out/win/dbg) instead of out/dbg64.
+// On macOS the suite is the ng debug ASan app; there is no orig build.
+// `-exe <path>` runs the tests against an executable that is already built,
+// e.g. a release or an ASan one, or a build from another checkout. Validated
+// here so a typo fails immediately instead of every test timing out.
+export const USE_NG = process.argv.includes("-ng") || IS_MAC;
+
+function exeFromArgv(argv: string[]): string {
+  const i = argv.indexOf("-exe");
+  if (i < 0) {
+    return "";
+  }
+  if (argv.includes("-ng") && !IS_MAC) {
+    console.error("-ng and -exe cannot be used together");
+    process.exit(1);
+  }
+  const bail = (why: string): never => {
+    console.error(`-exe: ${why}`);
+    process.exit(1);
+  };
+  const path = argv[i + 1];
+  if (!path || path.startsWith("-")) {
+    bail("expected a path to SumatraPDF.exe");
+  }
+  const full = resolve(path!);
+  if (!existsSync(full) || !statSync(full).isFile()) {
+    bail(`no such file: ${full}`);
+  }
+  if (!IS_WIN) {
+    return full;
+  }
+  if (!/\.exe$/i.test(full)) {
+    bail(`not an executable: ${full}`);
+  }
+  // the name can be anything (SumatraPDF-static.exe, a renamed copy), so ask
+  // the file itself what it is
+  const ps = `(Get-Item -LiteralPath '${full}').VersionInfo.ProductName`;
+  const p = Bun.spawnSync(["powershell", "-NoProfile", "-Command", ps]);
+  const product = p.stdout.toString().trim();
+  if (!/sumatrapdf/i.test(product)) {
+    bail(`not a SumatraPDF executable (ProductName is '${product}'): ${full}`);
+  }
+  return full;
+}
+
+// The exe under test: the debug build, unless `-exe <path>` or SUMATRA_TEST_EXE
+// names another one. The GitHub CI job sets the environment variable to the
+// debug ASan build (out/dbg64_asan/SumatraPDF-static.exe), which is the same app
+// plus ASan. Both are read at import time, before any test runs.
+export const EXE_FROM_ARGV = exeFromArgv(process.argv);
+const SOURCE_EXE =
+  EXE_FROM_ARGV ||
+  (IS_MAC ? join(ROOT, "out", "mac", "dbg-asan", "SumatraPDF") : "") ||
+  (USE_NG ? join(ROOT, "out", "win", "dbg", "SumatraPDF.exe") : "") ||
+  process.env.SUMATRA_TEST_EXE ||
+  join(ROOT, "out", "dbg64", "SumatraPDF.exe");
+
+// Keep the executable and its portable settings file in a fresh directory for
+// every test run. This prevents a manual run, or an earlier test that saves
+// settings, from changing the starting state of later tests.
+export const TESTS_TMP_DIR = join(ROOT, ".work", "tests-tmp");
+// scratch files of tests (see tmpPath())
+export const TMP_DIR = join(TESTS_TMP_DIR, "tmp");
+export let EXE = SOURCE_EXE;
+
+export function prepareTestEnvironment(): void {
+  const sourceExe = resolve(SOURCE_EXE);
+  const exeName = basename(sourceExe);
+  const sourcePdb = IS_WIN ? sourceExe.replace(/\.exe$/i, ".pdb") : "";
+  if (IS_WIN && !existsSync(sourcePdb)) {
+    throw new Error(`test executable PDB not found: ${sourcePdb}`);
+  }
+  rmSync(TESTS_TMP_DIR, { recursive: true, force: true });
+  // a test may have resolved a tmpPath() at import, before this wipe
+  mkdirSync(TMP_DIR, { recursive: true });
+  const testExe = join(TESTS_TMP_DIR, exeName);
+  copyFileSync(sourceExe, testExe);
+  if (IS_WIN) {
+    copyFileSync(sourcePdb, join(TESTS_TMP_DIR, basename(sourcePdb)));
+    const sourceDll = join(dirname(sourceExe), "libsumatrapdf.dll");
+    if (existsSync(sourceDll)) {
+      copyFileSync(sourceDll, join(TESTS_TMP_DIR, "libsumatrapdf.dll"));
+    }
+    const sourceTool = join(dirname(sourceExe), "sumatrapdf-tool.exe");
+    if (existsSync(sourceTool)) {
+      copyFileSync(sourceTool, join(TESTS_TMP_DIR, "sumatrapdf-tool.exe"));
+    }
+  }
+  if (!IS_WIN) {
+    // ng is portable only with a settings file next to it; without one it
+    // reads the settings of the user running the tests
+    writeFileSync(join(TESTS_TMP_DIR, "SumatraPDF-settings.txt"), "");
+  }
+  EXE = testExe;
+}
+
+// An ASan build renders and starts several times slower than the debug one, so
+// waits sized for a debug build time out against it (a 25600% zoom needs far
+// more than the 30s issue-1195 asks for). Tests don't size their own waits for
+// it: control.ts multiplies its timeouts by this.
+// read before prepareTestEnvironment() copies the exe: the copy's name is the
+// same but its path no longer says asan
+export const IS_ASAN = /asan/i.test(EXE);
+export const SLOW_BUILD_FACTOR = IS_ASAN ? 4 : 1;
+
+export function isClosedPipeError(e: unknown): boolean {
+  const err = e as { code?: string; message?: string };
+  return /EPIPE|ECONNRESET|ERR_SOCKET_CLOSED|broken pipe/i.test(`${err?.code ?? ""} ${err?.message ?? e}`);
+}
+
+export function drainProcStderr(stderr: Bun.Subprocess["stderr"]): Promise<string> {
+  if (!stderr) {
+    return Promise.resolve("");
+  }
+  const stream = stderr as unknown as { on?: (ev: string, fn: (e: Error) => void) => void };
+  stream.on?.("error", () => {});
+  return new Response(stderr).text().catch((e: unknown) => {
+    if (isClosedPipeError(e)) {
+      return "";
+    }
+    throw e;
+  });
+}
+
+let appUnitTests: Promise<void> | null = null;
+
+export function runAppUnitTests(): Promise<void> {
+  if (appUnitTests) {
+    return appUnitTests;
+  }
+
+  appUnitTests = (async () => {
+    // ng's unit tests are the test_util target, not SumatraPDF.exe -unit-tests
+    const unitName = IS_WIN ? "test_util.exe" : "test_util";
+    const unitExe = USE_NG ? join(dirname(resolve(SOURCE_EXE)), unitName) : EXE;
+    const unitArgs = USE_NG ? ["-for-ai"] : ["-unit-tests", "-for-ai"];
+    const proc = Bun.spawn([unitExe, ...unitArgs], {
+      cwd: USE_NG ? ROOT : undefined,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(`app unit tests failed (exit ${exitCode}):\n${(stdout + stderr).trim()}`);
+    }
+  })();
+  return appUnitTests;
+}
+
+// Quit / kill closing a control pipe or stderr can reject after the test has
+// already passed; Bun would print EPIPE into the next test's progress line
+process.on("unhandledRejection", (reason) => {
+  if (isClosedPipeError(reason)) {
+    return;
+  }
+  console.error("unhandledRejection:", reason);
+});
+
+// A default shortcut as this OS's menus show it: "Ctrl + X" is "⌘X" on macOS.
+// Covers what Accelerators.cpp converts: Ctrl becomes Cmd, glyphs replace names.
+export function shortcutLabel(win: string): string {
+  if (!IS_MAC) {
+    return win;
+  }
+  const parts = win.split(" + ");
+  const key = parts.pop()!;
+  const glyphs: [string, string][] = [
+    ["Alt", "⌥"],
+    ["Shift", "⇧"],
+    ["Ctrl", "⌘"],
+  ];
+  let res = "";
+  for (const [mod, glyph] of glyphs) {
+    if (parts.includes(mod)) {
+      res += glyph;
+    }
+  }
+  return res + key;
+}
+
+// Extract page text via the debug -extract-text harness (hex-encoded UTF-8).
+// The GUI exe's stdout often does not reach a Bun pipe on Windows; PowerShell
+// (a console app) relays it. pageNo -1 means all pages (same as the flag).
+// Newlines in the harness are encoded as '_' (0x5f); those become real '\n'.
+// Throws if no "text on page" line appears (missing DEBUG build, bad path, …).
+export function extractPageText(file: string, pageNo: number = -1): string {
+  const p = IS_WIN
+    ? Bun.spawnSync([
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        `& '${EXE}' -for-testing -extract-text ${pageNo} '${file}' 2>&1 | Out-String -Width 100000`,
+      ])
+    : Bun.spawnSync([EXE, "-for-testing", "-extract-text", String(pageNo), file]);
+  const raw = p.stdout.toString() + p.stderr.toString();
+  let all = "";
+  let nPages = 0;
+  for (const m of raw.matchAll(/text on page \d+: '([0-9a-f ]*)'/g)) {
+    nPages++;
+    const hex = m[1].trim();
+    if (!hex) {
+      continue;
+    }
+    const bytes = hex.split(/\s+/).map((h) => parseInt(h, 16));
+    all += Buffer.from(bytes).toString("utf8");
+  }
+  if (nPages === 0) {
+    throw new Error(
+      `extractPageText: no text from ${file} (debug build? -extract-text is DEBUG-only). ` +
+        `out=${raw.slice(0, 400).replace(/\s+/g, " ")}`,
+    );
+  }
+  // '_' is the harness's stand-in for newline
+  return all.split("_").join("\n");
+}
+
+// Command ids (sent with WM_COMMAND) live in src/shared/Commands.h, but they're
+// generated and renumber whenever a command is added or removed -- so tests must
+// never hardcode the integer. Look it up by name at runtime instead, so a test
+// keeps targeting the right command after the enum shifts.
+let cmdIdCache: Map<string, number> | null = null;
+export function cmdId(name: string): number {
+  if (!cmdIdCache) {
+    cmdIdCache = new Map();
+    const src = readFileSync(join(ROOT, "src", "shared", "Commands.h"), "utf8");
+    const re = /\b(Cmd\w+)\s*=\s*(\d+)\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      cmdIdCache.set(m[1], parseInt(m[2], 10));
+    }
+  }
+  const id = cmdIdCache.get(name);
+  if (id === undefined) {
+    throw new Error(`cmdId: '${name}' not found in src/shared/Commands.h`);
+  }
+  return id;
+}
+
+// Assemble a PDF from object bodies (no "n 0 obj" wrappers). Object 1 must be
+// the catalog. Offsets use latin1 byte length so a binary header stays valid.
+export function assemblePdf(objects: string[], opts?: { header?: string; trailerExtras?: string }): string {
+  let body = opts?.header ?? "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (let i = 0; i < objects.length; i++) {
+    offsets.push(Buffer.byteLength(body, "latin1"));
+    body += `${i + 1} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xrefStart = Buffer.byteLength(body, "latin1");
+  const size = objects.length + 1;
+  body += `xref\n0 ${size}\n0000000000 65535 f \n`;
+  for (const off of offsets) {
+    body += `${String(off).padStart(10, "0")} 00000 n \n`;
+  }
+  const extras = opts?.trailerExtras ? ` ${opts.trailerExtras}` : "";
+  body += `trailer\n<< /Size ${size} /Root 1 0 R${extras} >>\nstartxref\n${xrefStart}\n%%EOF\n`;
+  return body;
+}
+
+// One-page US-letter PDF. `annots` are /Annot dictionaries on the page.
+export function makeOnePagePdf(opts?: { annots?: string[]; mediaBox?: string; header?: string }): string {
+  const annots = opts?.annots ?? [];
+  const media = opts?.mediaBox ?? "[0 0 612 792]";
+  const annotsEntry = annots.length > 0 ? ` /Annots [${annots.join(" ")}]` : "";
+  return assemblePdf(
+    [
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+      `<< /Type /Page /Parent 2 0 R /MediaBox ${media}${annotsEntry} >>`,
+    ],
+    { header: opts?.header },
+  );
+}
+
+// A valid one-page PDF with no content, for tests that only need a document the
+// app can open (a link target, a tab to switch to, ...). The xref offsets are
+// computed, so mupdf loads it without running its repair pass. For a PDF with
+// actual text on the page see makeTextPdf.
+export function makeMinimalPdf(title: string): Buffer {
+  return Buffer.from(
+    assemblePdf(
+      [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << >> >>",
+        `<< /Title (${title}) >>`,
+      ],
+      { header: "%PDF-1.7\n", trailerExtras: "/Info 4 0 R" },
+    ),
+    "latin1",
+  );
+}
+
+// US-letter pages with no content.
+export function makeBlankPdf(nPages = 1): string {
+  const kids = Array.from({ length: nPages }, (_, i) => `${3 + i} 0 R`).join(" ");
+  const objs = ["<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Count ${nPages} /Kids [${kids}] >>`];
+  for (let i = 0; i < nPages; i++) {
+    objs.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>");
+  }
+  return assemblePdf(objs);
+}
+
+const HELVETICA = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+
+function contentStream(content: string): string {
+  return `<< /Length ${content.length} >>\nstream\n${content}\nendstream`;
+}
+
+// One page with `line` in 24pt Helvetica at (72, 720).
+export function makeOneLinePdf(line: string): Buffer {
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    HELVETICA,
+    contentStream(`BT /F1 24 Tf 72 720 Td (${line}) Tj ET`),
+  ];
+  return Buffer.from(assemblePdf(objs, { header: "%PDF-1.5\n" }), "latin1");
+}
+
+// Pages labelled "page N top" and "page N bottom", to tell scroll positions apart.
+export function makeTopBottomPdf(pageCount: number): Buffer {
+  const objs = ["<< /Type /Catalog /Pages 2 0 R >>", "", HELVETICA];
+  const kids: string[] = [];
+  for (let page = 1; page <= pageCount; page++) {
+    const pageNum = objs.length + 1;
+    kids.push(`${pageNum} 0 R`);
+    const content = `BT /F1 24 Tf 72 720 Td (page ${page} top) Tj ET BT /F1 24 Tf 72 72 Td (page ${page} bottom) Tj ET`;
+    objs.push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ` +
+        `/Resources << /Font << /F1 3 0 R >> >> /Contents ${pageNum + 1} 0 R >>`,
+    );
+    objs.push(contentStream(content));
+  }
+  objs[1] = `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pageCount} >>`;
+  return Buffer.from(assemblePdf(objs, { header: "%PDF-1.5\n" }), "latin1");
+}
+
+// One page with `line` in 18pt Helvetica at (72, 700). Objects 4, 5, 7-9, 11
+// and 12 are null: tests that add annotations rely on the object numbering.
+export function makeTextPdf(line: string): Buffer {
+  const objs: string[] = new Array(12).fill("null");
+  objs[0] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objs[1] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+  objs[2] =
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ` +
+    `/Resources << /Font << /F1 6 0 R >> >> /Contents 10 0 R >>`;
+  objs[5] = HELVETICA;
+  objs[9] = contentStream(`BT /F1 18 Tf 72 700 Td (${line}) Tj ET`);
+  return Buffer.from(assemblePdf(objs, { header: "%PDF-1.7\n%\xe2\xe3\xcf\xd3\n" }), "latin1");
+}
+
+// One page with an unsigned /Sig field named CEO.
+export function writePdfWithEmptySigField(path: string): void {
+  const content = "BT /F1 14 Tf 30 150 Td (please sign below) Tj ET";
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R] /SigFlags 3 >> >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> " +
+      "/Contents 4 0 R /Annots [6 0 R] >>",
+    contentStream(content),
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Annot /Subtype /Widget /FT /Sig /T (CEO) /Rect [30 40 220 100] /F 4 /P 3 0 R /DA (/F1 0 Tf 0 g) >>",
+  ];
+  writeFileSync(path, assemblePdf(objs, { header: "%PDF-1.7\n" }), "latin1");
+}
+
+// Fresh -appdata directory with SumatraPDF-settings.txt. Tests that need extra
+// files write them into the returned path.
+export function writeAppdata(name: string, settings: string): string {
+  const dir = tmpPath(name);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const body = settings.endsWith("\n") ? settings : `${settings}\n`;
+  writeFileSync(join(dir, "SumatraPDF-settings.txt"), body);
+  return dir;
+}
+
+export async function pollUntil<T>(
+  fn: () => T | Promise<T>,
+  ok: (value: T) => boolean,
+  opts?: { timeoutMs?: number; intervalMs?: number; error?: string | ((last: T) => string) },
+): Promise<T> {
+  const timeoutMs = opts?.timeoutMs ?? 8000 * SLOW_BUILD_FACTOR;
+  const intervalMs = opts?.intervalMs ?? 50;
+  const deadline = Date.now() + timeoutMs;
+  let last!: T;
+  for (;;) {
+    last = await fn();
+    if (ok(last)) {
+      return last;
+    }
+    if (Date.now() >= deadline) {
+      const err = opts?.error;
+      throw new Error(typeof err === "function" ? err(last) : (err ?? "timed out"));
+    }
+    await Bun.sleep(intervalMs);
+  }
+}
+
+export function findAnnotWindow(pid: number, frame: number): number {
+  let found = 0;
+  enumWindows((hwnd) => {
+    if (hwnd !== frame && getWindowPid(hwnd) === pid && getWindowText(hwnd).startsWith("Annotations")) {
+      found = hwnd;
+      return false;
+    }
+    return true;
+  });
+  return found;
+}
+
+export async function waitForAnnotWindow(pid: number, frame: number, timeoutMs = 10_000): Promise<number> {
+  return pollUntil(
+    () => findAnnotWindow(pid, frame),
+    (hwnd) => hwnd !== 0,
+    {
+      timeoutMs,
+      intervalMs: 50,
+      error: "Annotations window did not open",
+    },
+  );
+}
+
+// TestDpi (`ControlCommand.TestDpi`) helpers. The command id is imported lazily
+// so util.ts does not cycle with control.ts at load time.
+export async function dpiRequest(
+  client: { request(command: number, args?: unknown[]): Promise<unknown[]> },
+  action: string,
+): Promise<string> {
+  const { ControlCommand } = await import("./control.ts");
+  const response = await client.request(ControlCommand.TestDpi, [action]);
+  const code = Number(response[0] ?? -1);
+  const raw = String(response[1] ?? "");
+  if (code !== 0) {
+    throw new Error(`TestDpi ${action} failed (${code}): ${raw.trim()}`);
+  }
+  return raw;
+}
+
+export function parseDpiFields(raw: string): Record<string, number> {
+  const values: Record<string, number> = {};
+  for (const match of raw.matchAll(/(\w+)=(\d+)/g)) {
+    values[match[1]] = Number(match[2]);
+  }
+  return values;
+}
+
+export async function waitForDpiFrame(
+  client: { request(command: number, args?: unknown[]): Promise<unknown[]> },
+  expectedDpi: number,
+  ready: (fields: Record<string, number>, raw: string) => boolean,
+  timeoutMs = 5000,
+): Promise<{ fields: Record<string, number>; raw: string }> {
+  const load = async () => {
+    const raw = await dpiRequest(client, "state");
+    return { fields: parseDpiFields(raw), raw };
+  };
+  return pollUntil(load, (s) => s.fields.frame === expectedDpi && ready(s.fields, s.raw), {
+    timeoutMs,
+    intervalMs: 40,
+    error: (s) => `DPI state did not settle at ${expectedDpi}: ${s.raw.trim()}`,
+  });
+}
+
+export function requireDpiShrank(name: string, high: number, low: number): void {
+  if (high <= 0 || low <= 0 || high < low * 1.3) {
+    throw new Error(`${name} did not follow 150% -> 75% DPI (${high} -> ${low})`);
+  }
+}
+
+// Directory for temporary / scratch files produced by tests. It lives below
+// TESTS_TMP_DIR so explicit -appdata directories are isolated from the user's
+// settings and from the executable used by the test. Use tmpPath() to get a
+// path inside it (dir created on demand).
+export function tmpPath(name: string): string {
+  mkdirSync(TMP_DIR, { recursive: true });
+  return join(TMP_DIR, name);
+}
+
+export function crc32(buf: Uint8Array): number {
+  let c = 0xffffffff;
+  for (const b of buf) {
+    c ^= b;
+    for (let i = 0; i < 8; i++) {
+      c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+// Store-only (uncompressed) zip, e.g. a .cbz. Names may include '/' for folders.
+export function makeStoredZip(files: { name: string; data: Buffer }[]): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = Buffer.from(f.name, "utf8");
+    const crc = crc32(f.data);
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(20, 4);
+    lh.writeUInt32LE(crc, 14);
+    lh.writeUInt32LE(f.data.length, 18);
+    lh.writeUInt32LE(f.data.length, 22);
+    lh.writeUInt16LE(name.length, 26);
+    locals.push(lh, name, f.data);
+
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(20, 4);
+    ch.writeUInt16LE(20, 6);
+    ch.writeUInt32LE(crc, 16);
+    ch.writeUInt32LE(f.data.length, 20);
+    ch.writeUInt32LE(f.data.length, 24);
+    ch.writeUInt16LE(name.length, 28);
+    ch.writeUInt32LE(offset, 42);
+    centrals.push(ch, name);
+    offset += lh.length + name.length + f.data.length;
+  }
+  const central = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, central, end]);
+}
+
+export function writeStoredZip(path: string, files: { name: string; data: Buffer }[]): void {
+  writeFileSync(path, makeStoredZip(files));
+}
+
+export type ZipEntry = { name: string; data: Uint8Array; store?: boolean };
+
+// Entries of a zip with stored or deflated members, via its central directory.
+export function readZip(zip: Buffer): ZipEntry[] {
+  const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (eocd < 0) throw new Error("readZip: no end of central directory");
+  const count = zip.readUInt16LE(eocd + 10);
+  let p = zip.readUInt32LE(eocd + 16);
+  const entries: ZipEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    const method = zip.readUInt16LE(p + 10);
+    const size = zip.readUInt32LE(p + 20);
+    const nameLen = zip.readUInt16LE(p + 28);
+    const extraLen = zip.readUInt16LE(p + 30);
+    const commentLen = zip.readUInt16LE(p + 32);
+    const local = zip.readUInt32LE(p + 42);
+    const name = zip.toString("utf8", p + 46, p + 46 + nameLen);
+    const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+    const body = zip.subarray(start, start + size);
+    entries.push({ name, data: method === 0 ? new Uint8Array(body) : new Uint8Array(inflateRawSync(body)) });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
+// Zip with deflated entries; `store` keeps one uncompressed (an EPUB mimetype).
+export function makeZip(entries: ZipEntry[]): Buffer {
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = new TextEncoder().encode(e.name);
+    const store = e.store === true;
+    const body = store ? e.data : new Uint8Array(deflateRawSync(e.data));
+    const crc = crc32(e.data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true);
+    local.setUint16(4, 20, true);
+    local.setUint16(8, store ? 0 : 8, true);
+    local.setUint32(14, crc, true);
+    local.setUint32(18, body.length, true);
+    local.setUint32(22, e.data.length, true);
+    local.setUint16(26, name.length, true);
+    chunks.push(new Uint8Array(local.buffer), name, body);
+
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true);
+    cd.setUint16(4, 20, true);
+    cd.setUint16(6, 20, true);
+    cd.setUint16(10, store ? 0 : 8, true);
+    cd.setUint32(16, crc, true);
+    cd.setUint32(20, body.length, true);
+    cd.setUint32(24, e.data.length, true);
+    cd.setUint16(28, name.length, true);
+    cd.setUint32(42, offset, true);
+    central.push(new Uint8Array(cd.buffer), name);
+    offset += 30 + name.length + body.length;
+  }
+  const cdSize = central.reduce((n, c) => n + c.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, entries.length, true);
+  end.setUint16(10, entries.length, true);
+  end.setUint32(12, cdSize, true);
+  end.setUint32(16, offset, true);
+  return Buffer.concat([...chunks, ...central, new Uint8Array(end.buffer)]);
+}
+
+export function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+
+// Solid-color 8-bit RGB PNG.
+export function makePng(w: number, h: number, rgb: [number, number, number]): Buffer {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    const row = y * (w * 3 + 1);
+    raw[row] = 0;
+    for (let x = 0; x < w; x++) {
+      raw[row + 1 + x * 3] = rgb[0];
+      raw[row + 2 + x * 3] = rgb[1];
+      raw[row + 3 + x * 3] = rgb[2];
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+export function runPowerShell(script: string): { ok: boolean; out: string } {
+  const r = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]);
+  return { ok: r.exitCode === 0, out: r.stdout.toString() + r.stderr.toString() };
+}
+
+// Removes a signing-test certificate from the CurrentUser\My store.
+export function removeTestCert(thumbprint: string): void {
+  runPowerShell(`
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My','CurrentUser')
+    $store.Open('ReadWrite')
+    foreach ($c in $store.Certificates.Find('FindByThumbprint', '${thumbprint}', $false)) {
+      $store.Remove($c)
+    }
+    $store.Close()
+  `);
+}
+
+// path of an installed Ghostscript console exe, "" when none
+export function findGhostscript(): string {
+  for (const base of ["C:\\Program Files\\gs", "C:\\Program Files (x86)\\gs"]) {
+    if (!existsSync(base)) {
+      continue;
+    }
+    for (const ver of readdirSync(base)) {
+      for (const exe of ["gswin64c.exe", "gswin32c.exe"]) {
+        const path = join(base, ver, "bin", exe);
+        if (existsSync(path)) {
+          return path;
+        }
+      }
+    }
+  }
+  return "";
+}
+
+// convert a PDF to PostScript with Ghostscript
+export async function pdfToPs(gs: string, src: string, dst: string): Promise<void> {
+  const proc = Bun.spawn([gs, "-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=ps2write", `-sOutputFile=${dst}`, src], {
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  const code = await proc.exited;
+  if (code !== 0 || !existsSync(dst)) {
+    throw new Error(`ghostscript could not make ${dst} (exit ${code})`);
+  }
+}
+
+// format a duration in ms for test output (e.g. 34.3ms, 2.3s, 3m 2.3s)
+export function formatDuration(ms: number): string {
+  if (ms < 1000) {
+    return `${ms.toFixed(1)}ms`;
+  }
+  const sec = ms / 1000;
+  if (sec < 60) {
+    return `${sec.toFixed(1)}s`;
+  }
+  const min = Math.floor(sec / 60);
+  const remSec = sec - min * 60;
+  return `${min}m ${remSec.toFixed(1)}s`;
+}
+
+// every runTest() appends "<ms>\t<name>\t<pass|FAIL>" here, so a run can be
+// picked apart afterwards ("which tests are slow, and did that change?").
+// run-almost-all.ts / run-all.ts / run-pre-release.ts delete it before they start
+export const TEST_TIMES_FILE = join(ROOT, ".work", "test-times.txt");
+
+export function resetTestTimes(): void {
+  mkdirSync(dirname(TEST_TIMES_FILE), { recursive: true });
+  rmSync(TEST_TIMES_FILE, { force: true });
+}
+
+function recordTestTime(name: string, ms: number, ok: boolean): void {
+  try {
+    mkdirSync(dirname(TEST_TIMES_FILE), { recursive: true });
+    appendFileSync(TEST_TIMES_FILE, `${ms.toFixed(0)}\t${name}\t${ok ? "pass" : "FAIL"}\n`);
+  } catch {
+    // timing is a nicety; never fail a test over it
+  }
+}
+
+export type RunTestOptions = {
+  silent?: boolean;
+};
+
+function muteConsole(): () => void {
+  const log = console.log;
+  const error = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  return () => {
+    console.log = log;
+    console.error = error;
+  };
+}
+
+// "3/34 issue-5964.ts" before each test: what is about to run, and how far along
+// the suite is. The outermost suite sets the total; a suite nested in another
+// one (run-almost-all inside run-all / run-pre-release) leaves it alone.
+let progressTotal = 0;
+let progressDone = 0;
+
+export function startSuiteProgress(total: number): void {
+  if (progressTotal > 0) {
+    return;
+  }
+  progressTotal = total;
+  progressDone = 0;
+}
+
+// run one test and print pass/fail timing
+// win-automation registers this: it returns what the process a failed test
+// was driving wrote to stderr (an ASan report, a crash line), so "exited while
+// waiting for control response" comes with the reason instead of just EPIPE
+let gFailureContext: (() => Promise<string>) | null = null;
+
+export function setFailureContext(fn: () => Promise<string>): void {
+  gFailureContext = fn;
+}
+
+async function failureContext(): Promise<string> {
+  if (!gFailureContext) {
+    return "";
+  }
+  try {
+    return await gFailureContext();
+  } catch {
+    return "";
+  }
+}
+
+export async function runTest(name: string, fn: () => void | Promise<void>, opts?: RunTestOptions): Promise<void> {
+  const silent = opts?.silent ?? false;
+  // a Ctrl the machine thinks is held chords every posted key and click.
+  // Before the progress line and the muting, so what it says stays visible
+  await ensureModifierKeysUp();
+  const progress = progressTotal > 0 ? `${++progressDone}/${progressTotal} ${name}.ts` : "";
+  // A silent run prints nothing while a test runs, so the line stays open and
+  // the timing completes it: "3/34 issue-5964.ts in 2.0s". A verbose run has
+  // the test's own output coming next, so end the line right away.
+  let lineOpen = false;
+  if (progress) {
+    if (silent) {
+      process.stdout.write(progress);
+      lineOpen = true;
+    } else {
+      console.log(progress);
+    }
+  }
+  const t0 = performance.now();
+  const unmute = silent ? muteConsole() : () => {};
+  try {
+    await fn();
+    unmute();
+    recordTestTime(name, performance.now() - t0, true);
+    const elapsed = formatDuration(performance.now() - t0);
+    if (lineOpen) {
+      console.log(` in ${elapsed}`);
+    } else if (silent) {
+      console.log(`== ${name} in ${elapsed}`);
+    } else {
+      console.log(`✅ ${name} passed in ${elapsed}`);
+    }
+  } catch (e) {
+    unmute();
+    if (lineOpen) {
+      // don't glue the caller's error message onto the open line
+      console.log("");
+    }
+    recordTestTime(name, performance.now() - t0, false);
+    let msg = String((e as Error)?.message ?? e);
+    const ctx = await failureContext();
+    if (ctx) {
+      msg += `
+SumatraPDF stderr:
+${ctx}`;
+    }
+    throw new Error(`${name} failed after ${formatDuration(performance.now() - t0)}: ${msg}`);
+  }
+}
+
+export function isSilentArg(argv: string[] = process.argv): boolean {
+  return argv.includes("-silent") || argv.includes("--silent");
+}
+
+export type NamedTest = [string, () => void | Promise<void>];
+
+export type SuiteOptions = {
+  silent?: boolean;
+  // run-pre-release.ts / run-all.ts reset the file themselves so suites share one log
+  keepTestTimes?: boolean;
+  heading?: string;
+  summary?: boolean;
+};
+
+export async function runNamedTests(tests: NamedTest[], opts?: SuiteOptions): Promise<void> {
+  if (!opts?.keepTestTimes) {
+    resetTestTimes();
+  }
+  const silent = opts?.silent ?? false;
+  const summary = opts?.summary ?? true;
+  const t0 = performance.now();
+  for (const [name, fn] of tests) {
+    if (!silent) {
+      console.log(`\n========== ${name} ==========`);
+    }
+    await runTest(name, fn, { silent });
+  }
+  if (summary) {
+    const label = opts?.heading ?? "all";
+    console.log(`\n✅ ${label}: ${tests.length} tests passed in ${formatDuration(performance.now() - t0)}`);
+  }
+}
+
+// A locked screen or a disconnected RDP session has no interactive desktop, so
+// every test that hovers or drives the real cursor fails for reasons that have
+// nothing to do with the code. Say so up front instead of letting it look
+// like a regression.
+function checkInteractiveDesktop(): void {
+  if (hasInteractiveDesktop() || process.argv.includes("-allow-locked-desktop")) {
+    return;
+  }
+  const msg = [
+    "",
+    "❌ no interactive desktop: this session is locked or disconnected.",
+    "   Tests that move the real cursor cannot pass here.",
+    "   Unlock the console, or hand an RDP session back to it before disconnecting:",
+    "     query session && tscon <id> /dest:console",
+    "   Pass -allow-locked-desktop to run the suite anyway.",
+  ].join("\n");
+  console.error(msg);
+  process.exit(1);
+}
+
+export async function runSuiteMain(testit: (opts: SuiteOptions) => Promise<void>): Promise<void> {
+  const silent = isSilentArg();
+  checkInteractiveDesktop();
+  // an exe named with -exe is the one to test, so don't build over it
+  if (!process.argv.includes("--no-build") && !EXE_FROM_ARGV) {
+    buildApp({ silent });
+  }
+  prepareTestEnvironment();
+  const t0 = performance.now();
+  try {
+    await testit({ silent });
+  } catch (e) {
+    console.error(`\n❌ ${(e as Error)?.message ?? e} (after ${formatDuration(performance.now() - t0)})`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+// build SumatraPDF the same way cmd/build.ts does.
+// -ng builds the ng Windows app and its test_util target.
+// macOS builds the ng debug ASan app.
+export function buildApp(opts?: { silent?: boolean }): void {
+  const script = USE_NG ? "ng-build.ts" : "build.ts";
+  const args = IS_MAC
+    ? ["-dbg", "-asan", "SumatraPDF", "test_util"]
+    : USE_NG
+      ? ["-dbg", "SumatraPDF", "test_util"]
+      : ["-dbg"];
+  if (!opts?.silent) {
+    console.log(`• building ${IS_WIN ? "SumatraPDF.exe" : "SumatraPDF"} (cmd/${script}) ...`);
+  }
+  const p = Bun.spawnSync({
+    cmd: ["bun", join(ROOT, "cmd", script), ...args],
+    cwd: ROOT,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  if (p.exitCode !== 0) {
+    throw new Error("build failed");
+  }
+}
+
+// entry point for running a single test file directly:
+//   bun tests/issue-<n>.ts [--no-build]
+// builds (unless --no-build), runs testit(), exits 0 on pass / 1 on failure.
+export async function runStandalone(testit: () => void | Promise<void>, name?: string): Promise<void> {
+  const label = name ?? (process.argv[1] ?? "test").replace(/\\/g, "/").split("/").pop()!.replace(/\.ts$/, "");
+  // a single test is worth running locked (most don't touch the cursor), but
+  // say so, or a cursor-driven failure reads as a bug in the code
+  if (!hasInteractiveDesktop()) {
+    console.error("⚠ this session is locked or disconnected: tests that move the real cursor will fail");
+  }
+  try {
+    if (!process.argv.includes("--no-build") && !EXE_FROM_ARGV) {
+      buildApp();
+    }
+    prepareTestEnvironment();
+    await runTest(label, testit);
+  } catch (e) {
+    console.error(`\n❌ ${(e as Error)?.message ?? e}`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+export type PngImage = { w: number; h: number; nComp: number; data: Uint8Array };
+
+function paethPredictor(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) {
+    return a;
+  }
+  return pb <= pc ? b : c;
+}
+
+// Minimal PNG reader: gray, gray + alpha, RGB, RGBA and palette images at the
+// bit depths an encoder may pick for them (1-8; ng's PngOptimizer writes a
+// 2-color page as 1- or 2-bit palette), no interlace. The result is always
+// RGB, or RGBA when the image has alpha, so callers see 3 or 4 components.
+export function loadPng(path: string): PngImage {
+  const buf = readFileSync(path);
+  let off = 8;
+  let w = 0;
+  let h = 0;
+  let colorType = 0;
+  let bitDepth = 8;
+  let interlace = 0;
+  let palette: Buffer | null = null;
+  let paletteAlpha: Buffer | null = null;
+  const idat: Buffer[] = [];
+  while (off + 8 <= buf.length) {
+    const n = buf.readUInt32BE(off);
+    const type = buf.toString("latin1", off + 4, off + 8);
+    const data = buf.subarray(off + 8, off + 8 + n);
+    if (type === "IHDR") {
+      w = data.readUInt32BE(0);
+      h = data.readUInt32BE(4);
+      bitDepth = data[8]!;
+      colorType = data[9]!;
+      interlace = data[12]!;
+    } else if (type === "PLTE") {
+      palette = data;
+    } else if (type === "tRNS" && colorType === 3) {
+      paletteAlpha = data;
+    } else if (type === "IDAT") {
+      idat.push(data);
+    } else if (type === "IEND") {
+      break;
+    }
+    off += 12 + n;
+  }
+  // samples per pixel as stored
+  const samplesForType: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+  const samples = samplesForType[colorType] ?? 0;
+  const depthOk = bitDepth === 8 || ((colorType === 0 || colorType === 3) && [1, 2, 4].includes(bitDepth));
+  if (!samples || !depthOk || interlace !== 0 || w <= 0 || h <= 0 || (colorType === 3 && !palette)) {
+    throw new Error(`loadPng: unsupported png ${path} ct=${colorType} depth=${bitDepth} ${w}x${h}`);
+  }
+
+  // undo the row filters, on bytes
+  const raw = inflateSync(Buffer.concat(idat));
+  const bpp = Math.max(1, (samples * bitDepth) >> 3);
+  const stride = Math.ceil((w * samples * bitDepth) / 8);
+  const rows = new Uint8Array(h * stride);
+  let src = 0;
+  for (let y = 0; y < h; y++) {
+    const filter = raw[src++]!;
+    const row = y * stride;
+    const prev = (y - 1) * stride;
+    for (let x = 0; x < stride; x++) {
+      const left = x >= bpp ? rows[row + x - bpp]! : 0;
+      const up = y > 0 ? rows[prev + x]! : 0;
+      const ul = y > 0 && x >= bpp ? rows[prev + x - bpp]! : 0;
+      const v = raw[src++]!;
+      let recon = v;
+      if (filter === 1) {
+        recon = (v + left) & 255;
+      } else if (filter === 2) {
+        recon = (v + up) & 255;
+      } else if (filter === 3) {
+        recon = (v + ((left + up) >> 1)) & 255;
+      } else if (filter === 4) {
+        recon = (v + paethPredictor(left, up, ul)) & 255;
+      } else if (filter !== 0) {
+        throw new Error(`loadPng: png filter ${filter}`);
+      }
+      rows[row + x] = recon;
+    }
+  }
+
+  // sample i of a row, scaled to 0..255 for gray (palette indexes stay as is)
+  const maxSample = (1 << bitDepth) - 1;
+  const sampleAt = (row: number, i: number): number => {
+    if (bitDepth === 8) {
+      return rows[row + i]!;
+    }
+    const bit = i * bitDepth;
+    const byte = rows[row + (bit >> 3)]!;
+    return (byte >> (8 - bitDepth - (bit & 7))) & maxSample;
+  };
+  const hasAlpha = colorType === 4 || colorType === 6 || (colorType === 3 && paletteAlpha !== null);
+  const nComp = hasAlpha ? 4 : 3;
+  const data = new Uint8Array(w * h * nComp);
+  for (let y = 0; y < h; y++) {
+    const row = y * stride;
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * nComp;
+      const s = x * samples;
+      if (colorType === 3) {
+        const idx = sampleAt(row, s);
+        data[o] = palette![idx * 3]!;
+        data[o + 1] = palette![idx * 3 + 1]!;
+        data[o + 2] = palette![idx * 3 + 2]!;
+        if (hasAlpha) {
+          data[o + 3] = idx < paletteAlpha!.length ? paletteAlpha![idx]! : 255;
+        }
+      } else if (colorType === 0 || colorType === 4) {
+        const g = Math.round((sampleAt(row, s) * 255) / maxSample);
+        data[o] = data[o + 1] = data[o + 2] = g;
+        if (hasAlpha) {
+          data[o + 3] = sampleAt(row, s + 1);
+        }
+      } else {
+        for (let c = 0; c < samples; c++) {
+          data[o + c] = sampleAt(row, s + c);
+        }
+      }
+    }
+  }
+  return { w, h, nComp, data };
+}
+
+// [r, g, b] of one pixel
+export function pngPixel(img: PngImage, x: number, y: number): [number, number, number] {
+  const i = (y * img.w + x) * img.nComp;
+  return [img.data[i]!, img.data[i + 1]!, img.data[i + 2]!];
+}
+
+// n pages of widths first, first+1, ...; bookmark "Target" to page tocPage;
+// a square annotation on page annotPage (0: none), drawn as a filled red square
+export function makePdf(n: number, first: number, tocPage: number, annotPage: number): string {
+  const objs: string[] = [];
+  const pageObj = (i: number) => 5 + i; // objects 5.. are the pages
+  objs[1] = `<< /Type /Catalog /Pages 2 0 R${tocPage ? " /Outlines 3 0 R" : ""} >>`;
+  const kids = Array.from({ length: n }, (_, i) => `${pageObj(i)} 0 R`).join(" ");
+  objs[2] = `<< /Type /Pages /Count ${n} /Kids [${kids}] >>`;
+  objs[3] = "<< /Type /Outlines /First 4 0 R /Last 4 0 R /Count 1 >>";
+  objs[4] = tocPage ? `<< /Title (Target) /Parent 3 0 R /Dest [${pageObj(tocPage - 1)} 0 R /Fit] >>` : "<< >>";
+  const annotObj = 5 + n;
+  for (let i = 0; i < n; i++) {
+    const annots = i + 1 === annotPage ? ` /Annots [${annotObj} 0 R]` : "";
+    objs[pageObj(i)] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${first + i} 792]${annots} >>`;
+  }
+  const apObj = annotObj + 1;
+  objs[annotObj] =
+    `<< /Type /Annot /Subtype /Square /Rect [72 420 192 540] /C [1 0 0] /F 4 /AP << /N ${apObj} 0 R >> >>`;
+  const ap = "1 0 0 rg 0 0 120 120 re f\n";
+  objs[apObj] = `<< /Type /XObject /Subtype /Form /BBox [0 0 120 120] /Length ${ap.length} >>\nstream\n${ap}endstream`;
+  return assemblePdf(objs.slice(1));
+}

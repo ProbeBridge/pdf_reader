@@ -1,0 +1,39 @@
+{
+  "name": "sumatrapdf-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SumatraPDF with contextual AI notes and searchable reading history",
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/ProbeBridge/pdf_reader.git"
+  },
+  "scripts": {
+    "vendor:kokoro": "node scripts/vendor-kokoro.mjs",
+    "build": "powershell.exe -NoProfile -File scripts/build-local.ps1 -Configuration rel",
+    "install:local": "powershell.exe -NoProfile -File scripts/install-local.ps1",
+    "test": "npm run test:browser && npm run test:network && npm run test:history-ui",
+    "test:browser": "node tests/notes-browser.mjs",
+    "test:network": "node tests/notes-network.mjs",
+    "test:history-ui": "node tests/history-performance.mjs",
+    "test:history": "powershell.exe -NoProfile -File tests/history-restore.ps1",
+    "test:tts": "node tests/tts-offline.mjs",
+    "test:native": "bun tests/notes-native.ts",
+    "test:click": "bun tests/notes-click.ts",
+    "test:perf": "bun tests/notes-perf.ts",
+    "test:home": "bun tests/notes-home-thumbnails.ts",
+    "test:reflow": "node tests/reflow-browser.mjs && node tests/reflow-anchor.mjs"
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "3.8.1",
+    "bun": "1.4.4",
+    "kokoro-js": "1.2.1",
+    "minio": "8.0.7",
+    "phonemizer": "1.2.1",
+    "playwright": "1.60.0",
+    "prettier": "3.9.10"
+  }
+}

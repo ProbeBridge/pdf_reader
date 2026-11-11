@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>阅读历史</title>
+    <link rel="stylesheet" href="history.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">SumatraPDF <b>AI</b></div>
+      <label class="search"
+        ><span aria-hidden="true">⌕</span
+        ><input id="search" type="search" placeholder="搜索阅读历史" aria-label="搜索阅读历史" autofocus /><kbd
+          >Ctrl F</kbd
+        ></label
+      ><button id="open">打开文件</button><button id="notes">AI 注释</button>
+    </header>
+    <div class="layout">
+      <aside>
+        <h1>阅读历史</h1>
+        <p>按时间浏览读过的文档</p>
+        <div class="selected">◷　阅读历史</div>
+        <p class="aside-hint">文件只存于本机<br />移除记录不会删除文件</p>
+      </aside>
+      <main>
+        <div class="heading">
+          <h2 id="heading">阅读历史</h2>
+          <span id="count"></span>
+        </div>
+        <div id="groups"></div>
+        <div id="empty" hidden>还没有阅读记录。打开一份文档，开始阅读。</div>
+      </main>
+    </div>
+    <div id="toast" role="status" hidden></div>
+    <script type="module" src="history.js"></script>
+  </body>
+</html>

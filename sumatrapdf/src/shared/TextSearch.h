@@ -1,0 +1,105 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+
+struct TextSearch : public TextSelection {
+    enum class Direction : bool {
+        Backward = false,
+        Forward = true
+    };
+
+    explicit TextSearch(EngineBase* engine);
+    ~TextSearch();
+
+    void SetMatchCase(bool newMatchCase);
+    void SetMatchWholeWord(bool wholeWord);
+    void SetDirection(Direction direction);
+    void SetAllowedPages(const Vec<bool>& allowed);
+    bool PageAllowed(int pageNo) const;
+    int RestrictFirst() const;
+    int RestrictLast() const;
+    void SetLastResult(TextSelection* sel);
+    Vec<TextSel>* FindFirst(int page, Str text);
+    Vec<TextSel>* FindFirstOnPage(int pageNo, Str text);
+    Vec<TextSel>* FindNext();
+
+    int GetCurrentPageNo() const;
+
+    ProgressUpdateCb progressCb;
+
+    // For running in slices (see kUiSliceMs). With sliceMs set, a search that
+    // is still looking sliceMs after sliceStart (GetTickCount64()) stops before
+    // its next page and sets paused; Resume() carries on from there. Each
+    // slice resets sliceStart. sliceMs 0 (the default) searches to the end.
+    int sliceMs = 0;
+    u64 sliceStart = 0;
+    bool paused = false;
+    void StartSlice(int ms);
+    bool SliceUsedUp() const;
+    Vec<TextSel>* Resume();
+
+    // Lightweight container for page and offset within the page to use as return value of MatchEnd
+    struct PageAndOffset {
+        int page;
+        int offset;
+    };
+
+    Str findText;
+    Str anchor;
+    int findTextLen = 0;
+    int anchorLen = 0;
+    int findPage = 0;
+    bool forward = true;
+    bool matchCase = false;
+    // when set, the search only matches complete words: it forces both
+    // matchWordStart and matchWordEnd on regardless of leading/trailing spaces
+    // (issue #4295)
+    bool matchWholeWord = false;
+    // these two options are implicitly set when the search text begins
+    // resp. ends in a single space (many users already search that way),
+    // combining them yields a 'Whole words' search
+    bool matchWordStart = false;
+    bool matchWordEnd = false;
+
+    void SetText(Str text);
+    bool FindTextInPage(int pageNo, PageAndOffset* finalGlyph);
+    void EnsureFullyLaidOut();
+    bool FindStartingAtPage(int pageNo);
+    PageAndOffset MatchEnd(int startOff) const;
+
+    void Clear();
+    void Reset();
+
+    Str pageText;
+    int pageTextLen = 0;
+    int findIndex = 0;
+
+    Str lastText;
+    int nPages = 0;
+    Vec<bool> pagesToSkip;
+    // empty = all pages. Otherwise pageAllowed[i] is page i+1 (issue #5694).
+    Vec<bool> pageAllowed;
+
+  private:
+    int FindAnchor() const;
+    int ByteIdxOf(int cp) const;
+    void ResetByteIdx() const;
+    void SetPageText(int pageNo, Str text, int textLen);
+    bool LoadPageText(int pageNo);
+    int RestrictPage(Direction direction) const;
+
+    // page pageText is for (0: none)
+    int pageTextPageNo = 0;
+    // the page a paused search resumes at
+    int resumePage = 0;
+    // last ByteIdxOf() lookup: codepoint index and its byte offset in pageText
+    mutable int byteIdxCp = 0;
+    mutable int byteIdxByte = 0;
+
+    enum class PageSearchResult {
+        Canceled,
+        Empty,
+        NotFound,
+        Found
+    };
+    PageSearchResult SearchPage(int pageNo);
+};

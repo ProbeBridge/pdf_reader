@@ -1,0 +1,361 @@
+/* Copyright 2022 the SumatraPDF project authors (see AUTHORS file).
+   License: GPLv3 */
+#include "base/Base.h"
+#include "base/File.h"
+#include "base/Timer.h"
+
+#include "base/Win.h"
+#include "gui/Dpi.h"
+#include "base/FrameTimeoutCalculator.h"
+
+#include "gui/UIModels.h"
+#include "gui/Layout.h"
+#include "gui/win/WinGui.h"
+
+#include "Settings.h"
+#include "SumatraConfig.h"
+#include "Flags.h"
+#include "SumatraPDF.h"
+#include "Installer.h"
+#include "InstallerUtil.h"
+#include "AppTools.h"
+#include "Translations.h"
+#include "Version.h"
+
+#include "RegistryPreview.h"
+#include "RegistrySearchFilter.h"
+#include "SumatraLog.h"
+
+static HBRUSH ghbrBackground = nullptr;
+static ThreadHandle hThread = nullptr;
+static bool success = false;
+static Button* gButtonExit = nullptr;
+static Button* gButtonUninstaller = nullptr;
+static bool gWasSearchFilterInstalled = false;
+static bool gWasPreviewInstaller = false;
+static PreviewHandlers gOurPreviewHandlers;
+static Str gUninstallerLogPath;
+
+static void UninstallerThread() {
+    log(StrL("UninstallerThread started\n"));
+    // also kill the original uninstaller, if it's just spawned
+    // a DELETE_ON_CLOSE copy from the temp directory
+    TempStr exePath = GetInstalledExePathTemp();
+    TempStr ownPath = GetSelfExePathTemp();
+    if (!path::IsSame(exePath, ownPath)) {
+        KillProcessesWithModule(exePath, true);
+    }
+
+    // TODO: reconsider what is failure
+    bool ok = RemoveUninstallerRegistryInfo(HKEY_LOCAL_MACHINE);
+    ok |= RemoveUninstallerRegistryInfo(HKEY_CURRENT_USER);
+
+    if (!ok) {
+        log(StrL("RemoveUninstallerRegistryInfo failed\n"));
+        NotifyFailed(Tr("Failed to delete uninstaller registry keys"));
+    }
+
+    // mark them as uninstalled
+    gWasSearchFilterInstalled = false;
+    gWasPreviewInstaller = false;
+
+    RemoveInstallRegistryKeys(HKEY_LOCAL_MACHINE);
+    RemoveInstallRegistryKeys(HKEY_CURRENT_USER);
+    RemoveAppShortcuts();
+
+    RemoveInstallDirFromPath(gCli->allUsers, gCli->installDir);
+    RemoveInstalledFiles();
+    LoggedDeleteRegValue(HKEY_CURRENT_USER, StrL("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+                         StrL("SumatraPDF-QuickLook"));
+
+    // always succeed, even for partial uninstallations
+    success = true;
+
+    log(StrL("UninstallerThread finished\n"));
+    if (!gCli->silent) {
+        PostMessageW(gHwndFrame, kWmAppInstallationFinished, 0, 0);
+    }
+}
+
+static void OnButtonUninstall() {
+    if (!CheckInstallUninstallPossible()) {
+        return;
+    }
+
+    // disable the button during uninstallation
+    gButtonUninstaller->SetIsEnabled(false);
+    SetMsg(Tr("Uninstallation in progress..."), kColorMsgInstallation);
+    HwndRepaintNow(gHwndFrame);
+
+    auto fn = MkFunc0Void(UninstallerThread);
+    hThread = StartThread(fn, StrL("UninstallerThread"));
+    if (!hThread) {
+        // nothing was removed: say so and let the user retry
+        log(StrL("OnButtonUninstall: couldn't start the uninstaller thread\n"));
+        gButtonUninstaller->SetIsEnabled(true);
+        SetMsg(Tr("Uninstallation failed"), kColorMsgFailed);
+        HwndRepaintNow(gHwndFrame);
+    }
+}
+
+static void OnButtonExit() {
+    SendMessageW(gHwndFrame, WM_CLOSE, 0, 0);
+}
+
+static void OnUninstallationFinished() {
+    auto isRtl = IsUIRtl();
+    delete gButtonUninstaller;
+    gButtonUninstaller = nullptr;
+    gButtonExit = CreateDefaultButton(gHwndFrame, Tr("Close"), isRtl);
+    gButtonExit->onClick = MkFunc0Void(OnButtonExit);
+    SetMsg(Tr("SumatraPDF has been uninstalled."), gMsgError ? kColorMsgFailed : kColorMsgOk);
+    gMsgError = gFirstError;
+    HwndRepaintNow(gHwndFrame);
+
+    SafeCloseThreadHandle(&hThread);
+}
+
+constexpr const WCHAR* kInstallerWindowClassName = L"SUMATRA_PDF_INSTALLER_FRAME";
+
+static void CreateUninstallerWindow() {
+    TempStr title = fmt(Tr("SumatraPDF %s Uninstaller").s, StrL(CURR_VERSION_STRA));
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int dx = GetInstallerWinDx();
+    int dy = kInstallerWinDy;
+    HMODULE h = GetModuleHandleW(nullptr);
+    DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+    const auto* winCls = kInstallerWindowClassName;
+    gHwndFrame = CreateWindowW(winCls, CWStrTemp(title), dwStyle, x, y, dx, dy, nullptr, nullptr, h, nullptr);
+
+    DpiSetFromHwnd(gHwndFrame);
+    DpiScale(dx, dy);
+    HwndResizeClientSize(gHwndFrame, dx, dy);
+
+    auto isRtl = IsUIRtl();
+    gButtonUninstaller = CreateDefaultButton(gHwndFrame, Tr("Uninstall SumatraPDF"), isRtl);
+    gButtonUninstaller->onClick = MkFunc0Void(OnButtonUninstall);
+}
+
+static void ShowUsage() {
+    // Note: translation services aren't initialized at this point, so English only
+    TempStr caption = str::JoinTemp(StrL(kAppName), StrL(" Uninstaller Usage"));
+    TempStr msg = fmt(R"(uninstall.exe [/s][/d <path>]
+
+/s	uninstalls %s silently (without user interaction).
+/d	changes the directory from where %s will be uninstalled.)",
+                      StrL(kAppName), StrL(kAppName));
+    MsgBox(nullptr, msg, caption, MB_OK | MB_ICONINFORMATION);
+}
+
+static LRESULT CALLBACK WndProcUninstallerFrame(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    DpiScope dpiScope(hwnd);
+    bool handled;
+
+    LRESULT res = 0;
+    res = TryReflectMessages(hwnd, msg, wp, lp);
+    if (res != 0) {
+        return res;
+    }
+
+    switch (msg) {
+        case WM_CTLCOLORSTATIC: {
+            if (ghbrBackground == nullptr) {
+                ghbrBackground = CreateSolidBrush(MkRgb(0xff, 0xf2, 0));
+            }
+            HDC hdc = (HDC)wp;
+            SetTextColor(hdc, kColBlack);
+            SetBkMode(hdc, TRANSPARENT);
+            return (LRESULT)ghbrBackground;
+        }
+
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            break;
+
+        case WM_ERASEBKGND:
+            return TRUE;
+
+        case WM_PAINT:
+            OnPaintFrame(hwnd, false);
+            break;
+
+        case WM_COMMAND: {
+            handled = InstallerWmCommand(wp, OnButtonExit);
+            if (!handled) {
+                return DefWindowProc(hwnd, msg, wp, lp);
+            }
+            break;
+        }
+
+        case kWmAppInstallationFinished: {
+            OnUninstallationFinished();
+            if (gButtonExit) {
+                HwndSetFocus(gButtonExit->hwnd);
+            }
+            SetForegroundWindow(hwnd);
+            break;
+        }
+
+        default:
+            return DefWindowProc(hwnd, msg, wp, lp);
+    }
+
+    return 0;
+}
+
+static bool RegisterWinClass() {
+    WNDCLASSEX wcex{};
+
+    FillWndClassEx(wcex, kInstallerWindowClassName, WndProcUninstallerFrame);
+    auto* h = GetModuleHandle(nullptr);
+    WCHAR* iconName = MAKEINTRESOURCEW(GetAppIconID());
+    wcex.hIcon = LoadIconW(h, iconName);
+
+    RegisterClassExW(&wcex);
+    return true;
+}
+
+static bool InstanceInit() {
+    CreateUninstallerWindow();
+    if (!gHwndFrame) {
+        return FALSE;
+    }
+
+    SetDefaultMsg();
+
+    HwndCenterDialog(gHwndFrame);
+    ShowWindow(gHwndFrame, SW_SHOW);
+    SetForegroundWindow(gHwndFrame);
+
+    return TRUE;
+}
+
+// inspired by http://engineering.imvu.com/2010/11/24/how-to-write-an-interactive-60-hz-desktop-application/
+static int RunApp() {
+    MSG msg;
+    FrameTimeoutCalculator ftc(60);
+    auto t = TimeGet();
+    for (;;) {
+        const DWORD timeout = ftc.GetTimeoutInMilliseconds();
+        DWORD res = WAIT_TIMEOUT;
+        if (timeout > 0) {
+            res = MsgWaitForMultipleObjects(0, nullptr, TRUE, timeout, QS_ALLINPUT);
+        }
+        if (res == WAIT_TIMEOUT) {
+            AnimStep();
+            ftc.Step();
+        }
+
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                return (int)msg.wParam;
+            }
+            if (!IsDialogMessage(gHwndFrame, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+            }
+        }
+        // check if there are processes that need to be closed but
+        // not more frequently than once per ten seconds and
+        // only before (un)installation starts.
+        auto dur = TimeSinceInMs(t);
+        if (dur > 10000 && gButtonUninstaller && gButtonUninstaller->IsEnabled()) {
+            CheckInstallUninstallPossible(true);
+            t = TimeGet();
+        }
+    }
+}
+
+int RunUninstaller() {
+    gLogRegistryCalls = true;
+    Str uninstallerLogPath;
+    trans::SetCurrentLangByCode(trans::DetectUserLang());
+
+    if (gCli->log) {
+        // same as installer
+        uninstallerLogPath = GetInstallerLogPath();
+        if (uninstallerLogPath) {
+            StartLogToFile(uninstallerLogPath, false);
+        }
+        logf("------------- Starting SumatraPDF uninstallation\n");
+    }
+
+    // TODO: remove dependency on this in the uninstaller
+    // dup from the perm arena: flag strings are never individually freed
+    gCli->installDir = str::Dup(GetPermArena(), GetExistingInstallationDirTemp());
+    Str instDir = gCli->installDir;
+    TempStr cmdLine = ToUtf8Temp(GetCommandLineW());
+    TempStr exePath = GetSelfExePathTemp();
+    logf("Running uninstaller '%s' with args '%s' for '%s'\n", exePath, cmdLine, instDir);
+
+    int ret = 1;
+    auto installerExists = file::Exists(exePath);
+    if (!installerExists) {
+        log(StrL("Uninstaller executable doesn't exist\n"));
+        auto caption = Tr("Uninstallation failed");
+        auto msg = Tr("SumatraPDF installation not found.");
+        MsgBox(nullptr, msg, caption, MB_ICONEXCLAMATION | MB_OK);
+        goto Exit;
+    }
+
+    if (gCli->showHelp) {
+        ShowUsage();
+        ret = 0;
+        goto Exit;
+    }
+
+    RelaunchMaybeElevatedFromTempDirectory(gCli);
+
+    gWasSearchFilterInstalled = IsSearchFilterInstalled();
+    if (gWasSearchFilterInstalled) {
+        log(StrL("Search filter is installed\n"));
+    }
+    gWasPreviewInstaller = IsPreviewInstalled();
+    gOurPreviewHandlers = GetOurPreviewHandlers();
+    if (gWasPreviewInstaller) {
+        log(StrL("Previewer is installed\n"));
+    }
+
+    gDefaultMsg = Tr("Are you sure you want to uninstall SumatraPDF?");
+
+    // unregister search filter and previewer to reduce
+    // possibility of blocking
+    if (gWasSearchFilterInstalled) {
+        UnRegisterSearchFilter();
+    }
+    if (gWasPreviewInstaller) {
+        UnRegisterPreviewer();
+    }
+
+    if (gCli->silent) {
+        UninstallerThread();
+        ret = success ? 0 : 1;
+        goto Exit;
+    }
+
+    if (!RegisterWinClass()) {
+        goto Exit;
+    }
+
+    if (!InstanceInit()) {
+        goto Exit;
+    }
+    ret = RunApp();
+
+    // re-register if we un-registered but uninstallation was cancelled
+    if (gWasSearchFilterInstalled) {
+        RegisterSearchFilter(gCli->allUsers, gCli->installDir);
+    }
+    if (gWasPreviewInstaller) {
+        RegisterPreviewer(gCli->allUsers, gCli->installDir, gOurPreviewHandlers);
+    }
+    InitSelfDelete();
+    LaunchFileIfExists(uninstallerLogPath);
+
+Exit:
+#if 0 // technically a leak but there's no point
+    str::Free(gFirstError);
+#endif
+    return ret;
+}

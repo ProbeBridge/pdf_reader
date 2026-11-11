@@ -1,0 +1,8 @@
+{
+  "kokoro-js": "1.2.1",
+  "@huggingface/transformers": "3.8.1",
+  "phonemizer": "1.2.1",
+  "onnxruntime-web": "1.22.0-dev.20250409-89f8206ba4",
+  "onnxruntime-license": "microsoft/onnxruntime@89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0 (MIT)",
+  "model": "onnx-community/Kokoro-82M-v1.0-ONNX@1939ad2a8e416c0acfeecc08a694d14ef25f2231 onnx/model_fp16.onnx (Apache-2.0)"
+}
