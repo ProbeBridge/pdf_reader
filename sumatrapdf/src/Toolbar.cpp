@@ -189,10 +189,39 @@ static bool SetToolbarButtonHiddenByIdx(MainWindow* win, int idx, bool isHidden)
     return true;
 }
 
+struct ReflowToolbarButton : VirtButton {
+    bool checked = false;
+
+    explicit ReflowToolbarButton(PlatformFont* font) : VirtButton(StrL("重排：关"), font) {
+        cornerRadius = DpiScale(3);
+    }
+
+    void SetChecked(bool value) {
+        if (checked == value) {
+            return;
+        }
+        checked = value;
+        SetText(checked ? StrL("重排：开") : StrL("重排：关"));
+        RequestLayout();
+        Invalidate();
+    }
+
+    void Paint(VirtPaintCtx& ctx) override {
+        SetColor(kColBtnBg, checked ? TbSelectedColor() : TbSubtleBgColor());
+        SetColor(kColBtnBorder, TbEdgeColor());
+        VirtButton::Paint(ctx);
+    }
+};
+
 static void SetToolbarButtonCheckedByIdx(MainWindow* win, int idx, bool isChecked) {
+    VirtCtrl* w = ToolbarItemAt(win, idx);
+    if (w && OriginalCommandId(w->id) == CmdToggleDocumentReflow && AsVirtButton(w)) {
+        ((ReflowToolbarButton*)w)->SetChecked(isChecked);
+        return;
+    }
     // a custom button with ToolbarText is a VirtButton, which has no
     // checked state (and is not a VirtIconButton)
-    auto* ib = AsVirtIconButton(ToolbarItemAt(win, idx));
+    auto* ib = AsVirtIconButton(w);
     if (!ib || ib->isSelected == isChecked) {
         return;
     }
@@ -2703,6 +2732,11 @@ static void BuildToolbarLayout(MainWindow* win) {
         }
         if (bi.cmdId == 0 || !HasToolbarButtonContent(bi)) {
             w = MakeToolbarSeparator(tb->rowDy);
+        } else if (OriginalCommandId(bi.cmdId) == CmdToggleDocumentReflow) {
+            auto* b = new ReflowToolbarButton(tb->platformFont);
+            b->isRtl = box->rtl;
+            b->textPadding = {cyPad, iconPad, cyPad, iconPad};
+            w = b;
         } else if (bi.isText) {
             auto* b = new VirtButton(noTranslate ? bi.toolTip : trans::GetTranslation(bi.toolTip), tb->platformFont);
             b->isRtl = box->rtl;

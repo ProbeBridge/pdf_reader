@@ -447,10 +447,23 @@ try {
         originalBars.overlays.some((bar) => bar.visible && !bar.horizontal),
       "200% fixture must require both always-visible overlay scrollbars",
     );
+  async function checkReflowSwitch(enabled: boolean) {
+    const button = (await app.client.virtTree()).find((item: any) =>
+      item.text.startsWith("重排："),
+    );
+    assert.ok(button && button.rect.dx > 0 && button.rect.dy > 0);
+    assert.equal(
+      button.text,
+      enabled ? "重排：开" : "重排：关",
+      "toolbar switch must display the actual reflow state",
+    );
+  }
+  await checkReflowSwitch(false);
   sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
   let flow = await pageFor("sumatra-reflow/reflow.html");
   await traceFlow(flow);
   await waitPage(flow, 1, "first enable");
+  await checkReflowSwitch(true);
   const exported: any = await nativeCall(flow, "page", { page: 1 });
   writeFileSync(join(output, "actual-page1.xhtml"), exported.html || "");
   writeFileSync(
@@ -609,6 +622,7 @@ try {
   await waitPage(flow, 2, "reflow next button");
   sendCommandSync(app.frame, cmdId("CmdToggleDocumentReflow"));
   await app.client.waitForRenderIdle();
+  await checkReflowSwitch(false);
   const restoredBars = scrollbarSnapshot("originalAfterReflow");
   mark(`checking immediate original ${scrollMode} scrollbar restoration`);
   assert.equal(

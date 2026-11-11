@@ -370,6 +370,7 @@ bool ReflowDocumentHandleCommand(MainWindow* win, int cmdId) {
             ReflowEvent(view, StrL("reflownavigate"), fmt("{\"page\":%d}", view->page));
             view->Focus();
         }
+        ToolbarUpdateStateForWindow(win, false);
         ScheduleUiUpdate(win, kUiForceRelayout | kUiToolbarDirty);
         ScheduleRepaint(win, 0);
         return true;
