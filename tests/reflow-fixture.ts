@@ -127,6 +127,12 @@ export function makeReflowFixture(variant = "primary"): Buffer {
       54,
       550,
     ) +
+    text("ColumnRightOne begins the right paragraph.", 330, 509, 10) +
+    text("ColumnLeftOne begins the left paragraph.", 54, 515, 10) +
+    text("ColumnRightTwo continues its argument.", 330, 491, 10) +
+    text("ColumnLeftTwo continues its argument.", 54, 497, 10) +
+    text("ColumnRightThree ends the right paragraph.", 330, 473, 10) +
+    text("ColumnLeftThree ends the left paragraph.", 54, 479, 10) +
     "q 504 0 0 252 54 180 cm /Picture Do Q\n";
   const third =
     text("Pending extraction cleanup", 54, 750, 24) +

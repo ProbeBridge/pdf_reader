@@ -26,6 +26,9 @@
 #include "ContextNoteOverlay.h"
 #include "ReflowDocument.h"
 
+struct ReflowCache;
+static void DropReflowCache(ReflowCache* cache);
+
 struct ReflowView : WebviewWnd {
     MainWindow* win = nullptr;
     HWND frame = nullptr;
@@ -38,8 +41,10 @@ struct ReflowView : WebviewWnd {
     int zoom = 100;
     int pendingPages = 0;
     Str documentPath;
+    ReflowCache* cache = nullptr;
 
     ~ReflowView() override {
+        DropReflowCache(cache);
         if (engine) engine->Release();
         str::Free(documentPath);
     }
@@ -64,6 +69,113 @@ static TempStr ReflowField(Str data, Str key) {
     for (json::Value& value : reader)
         if (json::PathMatch(value.path, segment)) return str::DupTemp(value.value);
     return {};
+}
+
+struct ReflowCacheEntry {
+    int page;
+    i64 offset;
+    int size;
+};
+
+// One temporary JSONL document: explicit page order, ordered XHTML and the
+// unchanged source codepoints used by notes. A byte index avoids rereading
+// earlier pages. Worker references keep the file alive during tab closure.
+struct ReflowCache {
+    AtomicInt refs = 1;
+    Mutex mutex;
+    Str path;
+    file::FileHandle handle = file::kInvalidFileHandle;
+    Vec<ReflowCacheEntry> entries;
+    int hits = 0;
+
+    ReflowCache(Str source, int pageCount) {
+        path = str::Dup(GetTempFilePathTemp(StrL("srf")));
+        if (len(path) == 0) return;
+        Str named = str::JoinTemp(path, StrL(".ordered.html.jsonl"));
+        if (file::Rename(named, path)) {
+            str::Free(path);
+            path = str::Dup(named);
+        }
+        handle =
+            CreateFileW(CWStrTemp(path), GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+        if (handle == file::kInvalidFileHandle) return;
+        file::WriteAll(handle,
+                       fmt("{\"format\":\"SumatraPDF ordered XHTML\",\"version\":1,\"source\":%s,\"pageCount\":%d}\n",
+                           ReflowQuote(source), pageCount));
+        logf("reflow cache created: %s\n", path);
+    }
+
+    ~ReflowCache() {
+        if (handle == file::kInvalidFileHandle) {
+            if (path) file::Delete(path);
+        } else {
+            file::Close(handle);
+        }
+        str::Free(path);
+    }
+
+    bool Read(const ReflowCacheEntry& entry, ReflowPageData& data) {
+        constexpr int maxRecordBytes = 128 * 1024 * 1024;
+        if (entry.size <= 0 || entry.size > maxRecordBytes) return false;
+        LARGE_INTEGER offset;
+        offset.QuadPart = entry.offset;
+        if (!SetFilePointerEx(handle, offset, nullptr, FILE_BEGIN)) return false;
+        Str record(AllocArray<char>(entry.size), entry.size);
+        DWORD count = 0;
+        bool ok = ::ReadFile(handle, record.s, entry.size, &count, nullptr) && count == (DWORD)entry.size;
+        if (ok) {
+            json::Reader reader(record);
+            int page = 0;
+            for (json::Value& value : reader) {
+                if (json::PathMatch(value.path, StrL("/page")))
+                    page = atoi(CStrTemp(value.value));
+                else if (json::PathMatch(value.path, StrL("/html")))
+                    data.html = str::Dup(value.value);
+                else if (json::PathMatch(value.path, StrL("/sourceText")))
+                    data.sourceText = str::Dup(value.value);
+                else if (json::PathMatch(value.path, StrL("/displayText")))
+                    data.displayText = str::Dup(value.value);
+            }
+            ok = reader.Ok() && page == entry.page && len(data.html) > 0;
+        }
+        str::Free(record);
+        if (!ok) FreeReflowPageData(&data);
+        return ok;
+    }
+
+    ReflowPageData Load(EngineBase* engine, int page, bool& hit) {
+        ScopedMutex lock(&mutex);
+        ReflowPageData data;
+        for (int i = 0; i < len(entries); i++) {
+            if (entries[i].page != page) continue;
+            if (Read(entries[i], data)) {
+                hit = true;
+                hits++;
+                return data;
+            }
+            VecRemoveAt(entries, i);
+            break;
+        }
+        data = engine->ExtractReflowPage(page);
+        if (handle == file::kInvalidFileHandle || data.error) return data;
+        Str record = fmt("{\"page\":%d,\"html\":%s,\"sourceText\":%s,\"displayText\":%s}\n", page,
+                         ReflowQuote(data.html), ReflowQuote(data.sourceText), ReflowQuote(data.displayText));
+        i64 offset = file::SeekEnd(handle);
+        if (offset < 0 || !file::WriteAll(handle, record)) return data;
+        ReflowCacheEntry entry{page, offset, len(record)};
+        VecAppend(entries, entry);
+        ReflowPageData stored;
+        if (Read(entry, stored)) {
+            FreeReflowPageData(&data);
+            return stored;
+        }
+        return data;
+    }
+};
+
+static void DropReflowCache(ReflowCache* cache) {
+    if (cache && AtomicIntDec(&cache->refs) == 0) delete cache;
 }
 
 static void ReflowEvent(ReflowView* view, Str event, Str detail) {
@@ -122,6 +234,8 @@ struct ReflowPageTask {
     int page = 0;
     Str id;
     ReflowPageData data;
+    ReflowCache* cache = nullptr;
+    bool cached = false;
 };
 
 static void FinishReflowPage(ReflowPageTask* task) {
@@ -130,10 +244,12 @@ static void FinishReflowPage(ReflowPageTask* task) {
     if (view && view->epoch == task->epoch) {
         view->pendingPages--;
         if (ReflowDocumentVisible(task->win) && view->engine == task->engine) {
-            view->Resolve(task->id, 0,
-                          fmt("{\"page\":%d,\"html\":%s,\"sourceText\":%s,\"displayText\":%s,\"error\":%s}", task->page,
-                              ReflowQuote(task->data.html), ReflowQuote(task->data.sourceText),
-                              ReflowQuote(task->data.displayText), ReflowQuote(task->data.error)));
+            view->Resolve(
+                task->id, 0,
+                fmt("{\"page\":%d,\"html\":%s,\"sourceText\":%s,\"displayText\":%s,\"error\":%s,\"cached\":%s}",
+                    task->page, ReflowQuote(task->data.html), ReflowQuote(task->data.sourceText),
+                    ReflowQuote(task->data.displayText), ReflowQuote(task->data.error),
+                    task->cached ? StrL("true") : StrL("false")));
         } else {
             view->Resolve(task->id, 1, ReflowQuote(StrL("Reflow view is no longer active.")));
         }
@@ -141,11 +257,13 @@ static void FinishReflowPage(ReflowPageTask* task) {
     FreeReflowPageData(&task->data);
     str::Free(task->id);
     task->engine->Release();
+    DropReflowCache(task->cache);
     delete task;
 }
 
 static void LoadReflowPage(ReflowPageTask* task) {
-    task->data = task->engine->ExtractReflowPage(task->page);
+    task->data = task->cache ? task->cache->Load(task->engine, task->page, task->cached)
+                             : task->engine->ExtractReflowPage(task->page);
     task->engine->ReleaseTextExtractionThreadContext();
     uitask::Post(MkFunc0(FinishReflowPage, task), "ReflowPage");
     AtomicIntDec(&gDangerousThreadCount);
@@ -211,6 +329,13 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         view->ready = true;
         result = fmt("{\"page\":%d,\"pageCount\":%d,\"zoom\":%d,\"notes\":%s}", view->page, view->engine->PageCount(),
                      view->zoom, ContextNotesReflowState(win));
+    } else if (str::Eq(action, StrL("cache-info"))) {
+        auto* cache = view->cache;
+        if (cache) {
+            ScopedMutex lock(&cache->mutex);
+            result = fmt("{\"path\":%s,\"pages\":%d,\"hits\":%d,\"bytes\":%lld}", ReflowQuote(cache->path),
+                         len(cache->entries), cache->hits, file::SeekEnd(cache->handle));
+        }
     } else if (str::Eq(action, StrL("page"))) {
         int page = atoi(CStrTemp(ReflowField(data, StrL("page"))));
         if (page < 1 || page > view->engine->PageCount() || view->pendingPages >= 5) {
@@ -225,6 +350,8 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
             task->page = page;
             task->id = str::Dup(id);
             task->engine->AddRef();
+            task->cache = view->cache;
+            if (task->cache) AtomicIntInc(&task->cache->refs);
             view->pendingPages++;
             AtomicIntInc(&gDangerousThreadCount);
             ThreadHandle thread = StartThread(MkFunc0(LoadReflowPage, task), StrL("ReflowPage"));
@@ -235,6 +362,7 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
             AtomicIntDec(&gDangerousThreadCount);
             view->pendingPages--;
             task->engine->Release();
+            DropReflowCache(task->cache);
             str::Free(task->id);
             delete task;
             error = 1;
@@ -286,6 +414,7 @@ static ReflowView* CreateReflow(MainWindow* win) {
     view->engine->AddRef();
     view->page = win->ctrl->CurrentPageNo();
     view->documentPath = str::Dup(view->tab->filePath);
+    view->cache = new ReflowCache(view->documentPath, view->engine->PageCount());
     view->epoch = ++gReflowEpoch;
     view->enabled = true;
     view->dataDir = str::Dup(GetWebViewDataDirTemp());

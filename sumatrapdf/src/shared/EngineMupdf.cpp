@@ -8779,6 +8779,112 @@ static bool PreserveReflowVectors(fz_context* ctx, fz_page* page, fz_stext_page*
     return true;
 }
 
+static int ReflowOrderX(fz_stext_block* const* a, fz_stext_block* const* b) {
+    float d = (*a)->bbox.x0 - (*b)->bbox.x0;
+    if (d == 0) d = (*a)->bbox.y0 - (*b)->bbox.y0;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+static int ReflowOrderY(fz_stext_block* const* a, fz_stext_block* const* b) {
+    float d = (*a)->bbox.y0 - (*b)->bbox.y0;
+    if (d == 0) d = (*a)->bbox.x0 - (*b)->bbox.x0;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+static void CollectReflowOrder(fz_stext_block* block, Vec<fz_stext_block*>& items, bool& generated) {
+    for (; block; block = block->next) {
+        auto* structure = block->type == FZ_STEXT_BLOCK_STRUCT ? block->u.s.down : nullptr;
+        if (structure && structure->standard == FZ_STRUCTURE_DIV && strcmp(structure->raw, "Split") == 0) {
+            generated = true;
+            CollectReflowOrder(structure->first_block, items, generated);
+        } else if (block->type != FZ_STEXT_BLOCK_VECTOR && block->type != FZ_STEXT_BLOCK_GRID) {
+            VecAppend(items, block);
+        }
+    }
+}
+
+// Recover reading order after vector figures and watermarks have been resolved.
+// Cut columns before rows; keep semantic tables and author-tagged structures
+// atomic, so sorting cannot interleave their cells or destroy their tags.
+static void OrderReflowItems(Vec<fz_stext_block*>& items, Vec<fz_stext_block*>& ordered, int depth) {
+    if (len(items) == 0) return;
+    fz_rect bounds = fz_empty_rect;
+    for (auto* item : items) bounds = fz_union_rect(bounds, item->bbox);
+    constexpr int maxDepth = 32;
+    constexpr float minColumnGap = 12.f;
+    constexpr float minColumnWidth = .2f;
+    float cut = 0;
+    bool vertical = false;
+    if (depth < maxDepth) {
+        VecSort(items, ReflowOrderX);
+        float edge = items[0]->bbox.x1;
+        float best = minColumnGap;
+        for (int i = 1; i < len(items); i++) {
+            float start = items[i]->bbox.x0;
+            float width = bounds.x1 - bounds.x0;
+            if (start - edge >= best && edge - bounds.x0 >= width * minColumnWidth &&
+                bounds.x1 - start >= width * minColumnWidth) {
+                best = start - edge;
+                cut = (start + edge) * .5f;
+                vertical = true;
+            }
+            edge = fmaxf(edge, items[i]->bbox.x1);
+        }
+        if (!vertical) {
+            VecSort(items, ReflowOrderY);
+            edge = items[0]->bbox.y1;
+            best = 2.f;
+            for (int i = 1; i < len(items); i++) {
+                float start = items[i]->bbox.y0;
+                if (start - edge > best) {
+                    best = start - edge;
+                    cut = (start + edge) * .5f;
+                }
+                edge = fmaxf(edge, items[i]->bbox.y1);
+            }
+        }
+    }
+    if (cut != 0) {
+        Vec<fz_stext_block*> before;
+        Vec<fz_stext_block*> after;
+        for (auto* item : items) VecAppend((vertical ? item->bbox.x0 : item->bbox.y0) < cut ? before : after, item);
+        OrderReflowItems(before, ordered, depth + 1);
+        OrderReflowItems(after, ordered, depth + 1);
+        return;
+    }
+    VecSort(items, ReflowOrderY);
+    for (int i = 0; i < len(items);) {
+        Vec<fz_stext_block*> row;
+        fz_rect first = items[i]->bbox;
+        do {
+            VecAppend(row, items[i++]);
+            if (i == len(items)) break;
+            fz_rect next = items[i]->bbox;
+            float height = fminf(first.y1 - first.y0, next.y1 - next.y0);
+            if (fabsf(next.y0 + next.y1 - first.y0 - first.y1) > height * .7f) break;
+        } while (true);
+        VecSort(row, ReflowOrderX);
+        for (auto* item : row) VecAppend(ordered, item);
+    }
+}
+
+static void FixReflowReadingOrder(fz_stext_page* page) {
+    Vec<fz_stext_block*> items;
+    bool generated = false;
+    CollectReflowOrder(page->first_block, items, generated);
+    if (!generated) return;
+    Vec<fz_stext_block*> ordered;
+    OrderReflowItems(items, ordered, 0);
+    page->first_block = len(ordered) ? ordered[0] : nullptr;
+    page->last_block = len(ordered) ? ordered[len(ordered) - 1] : nullptr;
+    for (int i = 0; i < len(ordered); i++) {
+        auto* item = ordered[i];
+        item->prev = i > 0 ? ordered[i - 1] : nullptr;
+        item->next = i + 1 < len(ordered) ? ordered[i + 1] : nullptr;
+        if (item->type == FZ_STEXT_BLOCK_STRUCT && item->u.s.down) item->u.s.down->parent = nullptr;
+    }
+}
+
 static void WriteReflowPage(fz_context* ctx, void* state, const void* data, size_t size) {
     auto* buffer = (fz_buffer*)state;
     size_t current = fz_buffer_storage(ctx, buffer, nullptr);
@@ -8833,6 +8939,7 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         RemoveReflowWatermarks(ctx, text->first_block, text->mediabox);
         if (!PreserveReflowVectors(ctx, page->page, text))
             fz_throw(ctx, FZ_ERROR_LIMIT, "This page contains too many separate drawings to reflow.");
+        FixReflowReadingOrder(text);
         buffer = fz_new_buffer(ctx, 8192);
         output = fz_new_output(ctx, 8192, buffer, WriteReflowPage, nullptr, nullptr);
         fz_print_stext_page_as_xhtml(ctx, output, text, pageNo);

@@ -217,6 +217,34 @@ try {
       { number, sourceText: page.sourceText, displayText: page.displayText },
     );
     result.ui = ui;
+    if (number === 334 && args.includes("--reading-order")) {
+      result.readingOrder = await flow.evaluate(() => {
+        const content = document.querySelector(
+          '.source-page[data-page="334"] .page-content',
+        )!;
+        const text = content.textContent!.replace(/\s+/g, " ");
+        return [
+          "5.2 RISC-V E902 Subsystem",
+          "5.2.1 Overview",
+          "The RISC-V system includes",
+          "The RISC-V system has the following features:",
+          "5.2.2 Block Diagram",
+          "5.2.3 Register List",
+        ].map((marker) => ({ marker, offset: text.indexOf(marker) }));
+      });
+      for (let i = 0; i < result.readingOrder.length; i++) {
+        const item = result.readingOrder[i];
+        assert.ok(
+          item.offset >= 0,
+          `missing source heading/body: ${item.marker}`,
+        );
+        if (i > 0)
+          assert.ok(
+            item.offset > result.readingOrder[i - 1].offset,
+            `source headings and body must stay in reading order: ${JSON.stringify(result.readingOrder)}`,
+          );
+      }
+    }
     if (args.includes("--no-watermark")) {
       result.watermarkImages = await flow.evaluate(async (number: number) => {
         const content = document.querySelector(

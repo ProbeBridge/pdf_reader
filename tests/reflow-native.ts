@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 import { makeReflowFixture } from "./reflow-fixture.ts";
@@ -477,6 +477,28 @@ try {
     "real MuPDF table hunt must export a semantic table; mock HTML is not sufficient",
   );
   assert.match(exported.html, /<img[\s>]/, "real MuPDF must export the image");
+  const cache: any = await nativeCall(flow, "cache-info");
+  assert.ok(cache.path.endsWith(".ordered.html.jsonl"));
+  const records = readFileSync(cache.path)
+    .subarray(0, cache.bytes)
+    .toString("utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.equal(records[0].format, "SumatraPDF ordered XHTML");
+  assert.equal(records[0].version, 1);
+  const cachedPage = records.filter((record) => record.page === 1);
+  assert.equal(cachedPage.length, 1);
+  assert.equal(cachedPage[0].html, exported.html);
+  assert.equal(cachedPage[0].sourceText, exported.sourceText);
+  const repeated: any = await nativeCall(flow, "page", { page: 1 });
+  assert.equal(
+    repeated.cached,
+    true,
+    "repeat requests must read the temporary ordered file",
+  );
+  assert.equal(repeated.html, exported.html);
+  report.cache = cache;
   assert.equal(
     (exported.html.match(/<img[\s>]/g) || []).length,
     1,
@@ -521,6 +543,24 @@ try {
     "the actual 32-column PDF grid must be recognized as a table",
   );
   const grid = await geometry(flow, "register400");
+  const columnPage: any = await nativeCall(flow, "page", { page: 2 });
+  const columnMarkers = [
+    "ColumnLeftOne",
+    "ColumnLeftTwo",
+    "ColumnLeftThree",
+    "ColumnRightOne",
+    "ColumnRightTwo",
+    "ColumnRightThree",
+  ];
+  let previousColumn = -1;
+  for (const marker of columnMarkers) {
+    const position = columnPage.html.indexOf(marker);
+    assert.ok(
+      position > previousColumn,
+      `columns must read top to bottom, then left to right: ${marker}`,
+    );
+    previousColumn = position;
+  }
   assert.ok(
     grid.tables.some((table: any) => table.columns >= 32),
     "32-bit register columns must retain table structure",
@@ -726,6 +766,11 @@ try {
     10000,
   );
   assert.equal(code, 0);
+  assert.equal(
+    existsSync(cache.path),
+    false,
+    "the temporary document must be deleted after the reader exits",
+  );
   app = null;
   await browser.close().catch(() => {});
   browser = null;
