@@ -6,7 +6,7 @@ function pdfString(value: string): string {
     .replaceAll("(", "\\(")
     .replaceAll(")", "\\)");
 }
-function image(width: number, height: number): Buffer {
+function image(width: number, height: number, mask = 0): Buffer {
   const pixels = Buffer.alloc(width * height * 3);
   for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
@@ -18,7 +18,22 @@ function image(width: number, height: number): Buffer {
   const bytes = deflateSync(pixels);
   return Buffer.concat([
     Buffer.from(
-      `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${bytes.length} >>\nstream\n`,
+      `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 ${mask ? `/SMask ${mask} 0 R ` : ""}/Filter /FlateDecode /Length ${bytes.length} >>\nstream\n`,
+    ),
+    bytes,
+    Buffer.from("\nendstream"),
+  ]);
+}
+function grayImage(
+  width: number,
+  height: number,
+  pixels: Buffer,
+  mask = 0,
+): Buffer {
+  const bytes = deflateSync(pixels);
+  return Buffer.concat([
+    Buffer.from(
+      `<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceGray /BitsPerComponent 8 ${mask ? `/SMask ${mask} 0 R ` : ""}/Filter /FlateDecode /Length ${bytes.length} >>\nstream\n`,
     ),
     bytes,
     Buffer.from("\nendstream"),
@@ -131,23 +146,32 @@ export function makeReflowFixture(variant = "primary"): Buffer {
     "q 504 0 0 252 54 180 cm /Heavy Do Q\n";
   const stream = (content: string) =>
     `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`;
+  const watermarkMask = Buffer.alloc(240 * 160);
+  for (let y = 40; y < 120; y++)
+    for (let x = 20; x < 220; x++)
+      if (y < 46 || y >= 114 || x < 26 || x >= 214)
+        watermarkMask[y * 240 + x] = 255;
+  const watermark = "q 504 0 0 336 54 240 cm /Watermark Do Q\n";
   const objects: (string | Buffer)[] = [
     "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>",
     "<< /Type /Pages /Kids [7 0 R 8 0 R 9 0 R] /Count 3 >>",
     "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-    image(1800, 900),
+    image(1800, 900, 18),
     image(3600, 1800),
     "<< /Type /Outlines /First 13 0 R /Last 15 0 R /Count 3 >>",
     ...[10, 11, 12].map(
       (content) =>
-        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Picture 4 0 R /Heavy 5 0 R >> >> /Contents ${content} 0 R >>`,
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Picture 4 0 R /Heavy 5 0 R /Watermark 16 0 R >> >> /Contents ${content} 0 R >>`,
     ),
-    stream(first),
-    stream(second),
-    stream(third),
+    stream(watermark + first),
+    stream(watermark + second),
+    stream(watermark + third),
     "<< /Title (Overview) /Parent 6 0 R /Next 14 0 R /Dest [7 0 R /XYZ null null 0] >>",
     "<< /Title (Register map) /Parent 6 0 R /Prev 13 0 R /Next 15 0 R /Dest [8 0 R /XYZ null null 0] >>",
     "<< /Title (Cleanup) /Parent 6 0 R /Prev 14 0 R /Dest [9 0 R /XYZ null null 0] >>",
+    grayImage(240, 160, Buffer.alloc(240 * 160, 190), 17),
+    grayImage(240, 160, watermarkMask),
+    grayImage(1, 1, Buffer.from([255])),
   ];
   const chunks: Buffer[] = [
       Buffer.from("%PDF-1.7\n%\xE2\xE3\xCF\xD3\n", "latin1"),

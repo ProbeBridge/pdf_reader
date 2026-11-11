@@ -63,6 +63,18 @@ function label() {
 function anchor() {
   const top = $("nav").getBoundingClientRect().bottom;
   const area = $("#pages").getBoundingClientRect();
+  let currentPage = pages.get(current),
+    bestVisible = 0;
+  // A previous-page footer can still touch the viewport while the next page
+  // fills the reading area. Prefer that page instead of anchoring the footer.
+  for (const page of orderedPages()) {
+    const bounds = page.section.getBoundingClientRect();
+    const visible = Math.min(bounds.bottom, innerHeight, top + 260) - Math.max(bounds.top, top);
+    if (visible > bestVisible) {
+      bestVisible = visible;
+      currentPage = page;
+    }
+  }
   let fallback;
   // A source page can contain a very long table or paragraph. Pin a visible
   // glyph rather than the page's top, which can be thousands of pixels away.
@@ -89,11 +101,10 @@ function anchor() {
       )
         continue;
       const saved = { range, section, top: rect.top, sectionTop: section.getBoundingClientRect().top };
-      if (Number(section.dataset.page) === current) return saved;
+      if (section === currentPage?.section) return saved;
       fallback ||= saved;
     }
   }
-  const currentPage = pages.get(current);
   if (currentPage) {
     const rect = currentPage.section.getBoundingClientRect();
     if (rect.top < innerHeight && rect.bottom > top) {

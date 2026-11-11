@@ -8513,6 +8513,84 @@ static void FixReflowBlankGlyphs(fz_stext_block* block) {
     }
 }
 
+// Recognize large, sparse, pale neutral images with a transparency mask.
+// This is a conservative background-watermark test; photos, dark line art,
+// colored logos and small images remain ordinary document content.
+static bool IsReflowWatermark(fz_context* ctx, fz_image* image, fz_matrix ctm, fz_rect pageBounds) {
+    if (!image->mask || !image->colorspace || image->w <= 0 || image->h <= 0) return false;
+    auto space = image->colorspace->type;
+    if (space != FZ_COLORSPACE_RGB && space != FZ_COLORSPACE_GRAY) return false;
+    fz_rect bounds = fz_transform_rect(fz_unit_rect, ctm);
+    float area = (bounds.x1 - bounds.x0) * (bounds.y1 - bounds.y0);
+    float pageArea = (pageBounds.x1 - pageBounds.x0) * (pageBounds.y1 - pageBounds.y0);
+    if (area < pageArea * .2f) return false;
+    constexpr i64 maxWatermarkPixels = 4 * 1024 * 1024;
+    if ((i64)image->w * image->h > maxWatermarkPixels || (i64)image->mask->w * image->mask->h > maxWatermarkPixels)
+        return false;
+
+    fz_pixmap* pixels = nullptr;
+    fz_pixmap* mask = nullptr;
+    bool watermark = false;
+    fz_var(pixels);
+    fz_var(mask);
+    fz_var(watermark);
+    fz_try(ctx) {
+        constexpr int sampleSize = 96;
+        // Sample matching source pixels: independently downsampling /Matte
+        // colors and masks mixes transparent black into otherwise pale ink.
+        pixels = fz_get_pixmap_from_image(ctx, image, nullptr, nullptr, nullptr, nullptr);
+        mask = fz_get_pixmap_from_image(ctx, image->mask, nullptr, nullptr, nullptr, nullptr);
+        int components = pixels->n - pixels->alpha;
+        if (pixels->w > 0 && pixels->h > 0 && mask->w > 0 && mask->h > 0 && (components == 1 || components == 3)) {
+            int ink = 0;
+            int pale = 0;
+            constexpr int samples = sampleSize * sampleSize;
+            for (int y = 0; y < sampleSize; y++) {
+                const u8* colorRow = pixels->samples + (y * pixels->h / sampleSize) * pixels->stride;
+                const u8* maskRow = mask->samples + (y * mask->h / sampleSize) * mask->stride;
+                for (int x = 0; x < sampleSize; x++) {
+                    if (maskRow[(x * mask->w / sampleSize) * mask->n] < 32) continue;
+                    const u8* color = colorRow + (x * pixels->w / sampleSize) * pixels->n;
+                    int r = color[0];
+                    int g = components == 1 ? r : color[1];
+                    int b = components == 1 ? r : color[2];
+                    int low = std::min(r, std::min(g, b));
+                    int high = std::max(r, std::max(g, b));
+                    ink++;
+                    if (low >= 144 && high <= 245 && high - low <= 12) pale++;
+                }
+            }
+            watermark = ink >= 8 && ink <= samples * .35f && pale >= ink * .98f;
+        }
+    }
+    fz_always(ctx) {
+        fz_drop_pixmap(ctx, pixels);
+        fz_drop_pixmap(ctx, mask);
+    }
+    fz_catch(ctx) {
+        fz_report_error(ctx);
+    }
+    return watermark;
+}
+
+struct ReflowFilter : fz_device {
+    fz_rect pageBounds;
+};
+
+static void ReflowFillImage(fz_context* ctx, fz_device* dev, fz_image* image, fz_matrix ctm, float alpha,
+                            fz_color_params params) {
+    auto* filter = (ReflowFilter*)dev;
+    if (!IsReflowWatermark(ctx, image, ctm, filter->pageBounds))
+        fz_fill_image(ctx, dev->passthrough, image, ctm, alpha, params);
+}
+
+static fz_device* NewReflowFilter(fz_context* ctx, fz_device* target, fz_rect pageBounds) {
+    auto* filter = fz_new_derived_passthrough_device(ctx, target, ReflowFilter);
+    filter->pageBounds = pageBounds;
+    filter->fill_image = ReflowFillImage;
+    return filter;
+}
+
 struct ReflowVectorArea {
     fz_rect bounds;
     fz_stext_block* first;
@@ -8563,6 +8641,9 @@ static fz_image* ReflowVectorImage(fz_context* ctx, fz_page* page, fz_rect bound
         pixmap = fz_new_pixmap_with_bbox(ctx, fz_device_rgb(ctx), pixels, nullptr, 0);
         fz_clear_pixmap_with_value(ctx, pixmap, 255);
         device = fz_new_draw_device(ctx, transform, pixmap);
+        fz_device* filtered = NewReflowFilter(ctx, device, fz_bound_page(ctx, page));
+        fz_drop_device(ctx, device);
+        device = filtered;
         // Replay the original composition: arrows, text, masks and transparency
         // must remain together, rather than exporting the paths individually.
         fz_run_page(ctx, page, device, fz_identity, nullptr);
@@ -8593,6 +8674,17 @@ static void ClearReflowBlock(fz_context* ctx, fz_stext_block* block) {
     // Keep the pool-owned list node so its parent's links remain valid.
     block->type = FZ_STEXT_BLOCK_VECTOR;
     block->u = {};
+}
+
+static void RemoveReflowWatermarks(fz_context* ctx, fz_stext_block* block, fz_rect pageBounds) {
+    for (; block; block = block->next) {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down) {
+            RemoveReflowWatermarks(ctx, block->u.s.down->first_block, pageBounds);
+        } else if (block->type == FZ_STEXT_BLOCK_IMAGE &&
+                   IsReflowWatermark(ctx, block->u.i.image, block->u.i.transform, pageBounds)) {
+            ClearReflowBlock(ctx, block);
+        }
+    }
 }
 
 static bool PreserveReflowVectors(fz_context* ctx, fz_page* page, fz_stext_page* text) {
@@ -8738,6 +8830,7 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         if (result.displayText) opts.flags |= FZ_STEXT_ACCURATE_BBOXES;
         text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
         if (result.displayText) FixReflowBlankGlyphs(text->first_block);
+        RemoveReflowWatermarks(ctx, text->first_block, text->mediabox);
         if (!PreserveReflowVectors(ctx, page->page, text))
             fz_throw(ctx, FZ_ERROR_LIMIT, "This page contains too many separate drawings to reflow.");
         buffer = fz_new_buffer(ctx, 8192);

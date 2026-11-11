@@ -477,6 +477,11 @@ try {
     "real MuPDF table hunt must export a semantic table; mock HTML is not sufficient",
   );
   assert.match(exported.html, /<img[\s>]/, "real MuPDF must export the image");
+  assert.equal(
+    (exported.html.match(/<img[\s>]/g) || []).length,
+    1,
+    "retain the ordinary masked picture without exporting its background watermark",
+  );
   const tableStructure = await flow
     .locator('.source-page[data-page="1"] table')
     .first()
@@ -657,9 +662,10 @@ try {
   assert.match(drawing.sourceText, /VectorInput/);
   assert.match(drawing.sourceText, /VectorProcess/);
   assert.match(drawing.sourceText, /VectorOutput/);
-  assert.ok(
-    (drawing.html.match(/<img[\s>]/g) || []).length >= 2,
-    "an untagged vector diagram must survive beside the page's raster image",
+  assert.equal(
+    (drawing.html.match(/<img[\s>]/g) || []).length,
+    2,
+    "retain the vector diagram and raster image without their background watermark",
   );
   assert.ok(
     !drawing.html.includes("VectorInput"),

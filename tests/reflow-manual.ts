@@ -85,6 +85,8 @@ try {
     [
       "-appdata",
       data,
+      "-log-to-file",
+      join(output, "native.log"),
       "-page",
       String(requested[0]),
       "-window-pos",
@@ -215,6 +217,23 @@ try {
       { number, sourceText: page.sourceText, displayText: page.displayText },
     );
     result.ui = ui;
+    if (args.includes("--no-watermark")) {
+      result.watermarkImages = await flow.evaluate(async (number: number) => {
+        const content = document.querySelector(
+          `.source-page[data-page="${number}"] .page-content`,
+        )!;
+        const images = [...content.querySelectorAll("img")];
+        await Promise.all(images.map((image) => image.decode()));
+        return images.filter(
+          (image) => image.naturalWidth === 650 && image.naturalHeight === 486,
+        ).length;
+      }, number);
+      assert.equal(
+        result.watermarkImages,
+        0,
+        "the manual's background watermark must not become a standalone image",
+      );
+    }
     if (number === 334 && args.includes("--vector-diagram")) {
       result.diagram = await flow.evaluate(async () => {
         const content = document.querySelector(
@@ -256,7 +275,8 @@ try {
           let blue = 0,
             yellow = 0,
             green = 0,
-            black = 0;
+            black = 0,
+            gray = 0;
           for (let i = 0; i < pixels.length; i += 4) {
             const r = pixels[i],
               g = pixels[i + 1],
@@ -266,6 +286,12 @@ try {
             if (r > 185 && r < 230 && g > 205 && g < 240 && b > 160 && b < 210)
               green++;
             if (r < 65 && g < 65 && b < 65) black++;
+            if (
+              r >= 144 &&
+              r <= 220 &&
+              Math.max(r, g, b) - Math.min(r, g, b) <= 3
+            )
+              gray++;
           }
           if (blue > 100 && yellow > 100 && green > 100 && black > 100) {
             (window as any).manualDiagram = image;
@@ -276,6 +302,7 @@ try {
               yellow,
               green,
               black,
+              grayFraction: gray / (canvas.width * canvas.height),
             };
           }
         }
@@ -289,6 +316,11 @@ try {
         assert.ok(
           result.diagram[color] > 100,
           `Block Diagram must retain its ${color} nodes/text/arrows`,
+        );
+      if (args.includes("--no-watermark"))
+        assert.ok(
+          result.diagram.grayFraction < 0.02,
+          "the cropped Block Diagram must omit the gray background watermark",
         );
       result.diagramZoom = [];
       for (const zoom of [200, 400]) {
