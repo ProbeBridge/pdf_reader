@@ -103,7 +103,7 @@ MenuDef menuDefFileOpen[] = {
 
 //[ ACCESSKEY_GROUP File Menu
 MenuDef menuDefFile[] = {
-    {StrL("阅读历史"), CmdReadingHistory},
+    {TrN("Reading History"), CmdReadingHistory},
     {
         TrN("New &window"),
         CmdNewWindow,
@@ -228,9 +228,9 @@ MenuDef menuDefFile[] = {
 
 //[ ACCESSKEY_GROUP View Menu
 MenuDef menuDefView[] = {
-    {StrL("AI 注释侧栏"), CmdContextNotes},
-    {StrL("AI 注释设置..."), CmdContextSettings},
-    {StrL("正文重排"), CmdToggleDocumentReflow},
+    {TrN("AI Notes"), CmdContextNotes},
+    {TrN("AI Notes Settings..."), CmdContextSettings},
+    {TrN("Reflow document text"), CmdToggleDocumentReflow},
     {
         TrN("Command Palette"),
         CmdCommandPalette,
@@ -826,7 +826,7 @@ MenuDef menuDefSearchWith[] = {
 
 //[ ACCESSKEY_GROUP Menu (Selection)
 MenuDef menuDefMainSelection[] = {
-    {StrL("AI 注释"), CmdContextAnnotate},
+    {TrN("AI Annotation"), CmdContextAnnotate},
     {
         TrN("&Copy To Clipboard"),
         CmdCopySelection,

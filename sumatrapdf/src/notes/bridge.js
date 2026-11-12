@@ -1,6 +1,7 @@
 const listeners = new Set();
 export const zh = navigator.language.toLowerCase().startsWith("zh");
 export const text = (cn, en) => (zh ? cn : en);
+document.documentElement.lang = navigator.language;
 export async function native(action, args = {}) {
   if (!window.__sumatra__) throw new Error("SumatraPDF bridge is unavailable");
   return window.__sumatra__.call("notes", JSON.stringify({ action, ...args }));

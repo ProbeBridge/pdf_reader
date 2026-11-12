@@ -6,7 +6,8 @@ import { chromium } from "playwright";
 import { dayKey } from "../sumatrapdf/src/notes/history-model.js";
 
 const assets = resolve("sumatrapdf/src/notes");
-const artifacts = resolve(".test-artifacts/theme");
+const locale = process.env.SUMATRA_TEST_WEB_LOCALE || "zh-CN";
+const artifacts = resolve(`.test-artifacts/theme-${locale}`);
 await mkdir(artifacts, { recursive: true });
 const server = createServer(async (request, response) => {
   try {
@@ -60,7 +61,7 @@ const store = {
 };
 try {
   const context = await browser.newContext({
-    locale: "zh-CN",
+    locale,
     colorScheme: "dark",
     viewport: { width: 1000, height: 760 },
   });
@@ -137,6 +138,14 @@ try {
     await page.waitForFunction(
       () => document.documentElement.dataset.theme === "light",
     );
+    await page.waitForFunction(
+      () => document.documentElement.lang === navigator.language,
+    );
+    if (file === "reflow.html")
+      assert.equal(
+        await page.locator("#original").textContent(),
+        locale.startsWith("zh") ? "原版" : "Original view",
+      );
     assert.equal(
       await page
         .locator(":root")
@@ -219,15 +228,40 @@ try {
   assert.equal(await history.locator('[data-stat="words"]').textContent(), "2");
   assert.equal(
     await history.locator('[data-stat="time"]').textContent(),
-    "2 分钟",
+    locale.startsWith("zh") ? "2 分钟" : "2m",
   );
   assert.equal(await history.locator(".stats-table tbody tr").count(), 14);
-  await history.locator("#stats-range").selectOption("7");
-  assert.equal(await history.locator(".stats-table tbody tr").count(), 7);
+  assert.deepEqual(
+    await history
+      .locator("#stats-range option")
+      .evaluateAll((options) => options.map((option) => option.value)),
+    ["day", "week", "month", "year"],
+  );
+  for (const [period, count] of [
+    ["day", 14],
+    ["week", 12],
+    ["month", 12],
+    ["year", 5],
+  ]) {
+    await history.locator("#stats-range").selectOption(period);
+    assert.equal(await history.locator(".stats-table tbody tr").count(), count);
+    for (const metric of ["pages", "annotations", "seconds"]) {
+      const chart = history.locator(`.stats-chart[data-metric="${metric}"]`);
+      assert.equal(await chart.locator(".stats-bar").count(), count);
+      assert.equal(
+        await chart
+          .locator(".stats-bar")
+          .evaluateAll((bars) =>
+            bars.some((bar) => parseFloat(bar.style.height) > 0),
+          ),
+        true,
+      );
+    }
+  }
   assert.ok((await contrast(history, ".stat-card strong")).ratio >= 4.5);
   await history.screenshot({ path: resolve(artifacts, "statistics-dark.png") });
   await history.setViewportSize({ width: 390, height: 844 });
-  await history.locator("#stats-range").selectOption("90");
+  await history.locator("#stats-range").selectOption("week");
   assert.equal(
     await history.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -273,7 +307,7 @@ try {
   );
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: notes/history/reflow themes; live sync; readable controls; reload; keyboard; failure recovery; daily statistics and narrow layout.",
+    `PASS: ${locale} UI; synchronized themes; readable controls; calendar day/week/month/year charts with all three metrics; narrow layout; failure recovery.`,
   );
 } finally {
   await browser.close();

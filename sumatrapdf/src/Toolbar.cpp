@@ -192,7 +192,7 @@ static bool SetToolbarButtonHiddenByIdx(MainWindow* win, int idx, bool isHidden)
 struct ReflowToolbarButton : VirtButton {
     bool checked = false;
 
-    explicit ReflowToolbarButton(PlatformFont* font) : VirtButton(StrL("重排：关"), font) {
+    explicit ReflowToolbarButton(PlatformFont* font) : VirtButton(Tr("Reflow: Off"), font) {
         cornerRadius = DpiScale(3);
     }
 
@@ -201,7 +201,7 @@ struct ReflowToolbarButton : VirtButton {
             return;
         }
         checked = value;
-        SetText(checked ? StrL("重排：开") : StrL("重排：关"));
+        SetText(checked ? Tr("Reflow: On") : Tr("Reflow: Off"));
         RequestLayout();
         Invalidate();
     }
@@ -242,11 +242,8 @@ void SetToolbarButtonCheckedState(MainWindow* win, int cmdId, bool isChecked) {
 
 static Str ReflowToolTip(MainWindow* win) {
     bool visible = ReflowDocumentVisible(win);
-    if (str::StartsWithI(trans::GetCurrentLangCode(), StrL("zh"))) {
-        return visible ? StrL("关闭正文重排，返回原版视图") : StrL("启用正文重排：文字随窗口宽度换行");
-    }
-    return visible ? StrL("Turn off text reflow and return to the original view")
-                   : StrL("Reflow document text to fit the available width");
+    return visible ? Tr("Turn off text reflow and return to the original view")
+                   : Tr("Reflow document text to fit the available width");
 }
 
 static TempStr ZoomToolTip(MainWindow* win, Str tip) {
@@ -342,6 +339,7 @@ void ToolbarUpdateStateForWindow(MainWindow* win, bool setButtonsVisibility) {
     int n = TotalButtonsCount();
     bool visibilityChanged = false;
     SetToolbarButtonCheckedState(win, CmdToggleDocumentReflow, ReflowDocumentVisible(win));
+    SetToolbarButtonCheckedState(win, CmdToggleLightDarkTheme, !IsLightColor(ThemeWindowBackgroundColor()));
     // One command ctx for the whole pass. Building it per button used to call
     // HasToc() (and page hit-testing) once per toolbar item during load.
     auto* ctx = NewBuildMenuCtx(win->CurrentTab(), Point{0, 0});

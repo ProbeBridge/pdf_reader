@@ -107,7 +107,7 @@ the message must explain the context and reasoning.
   common live in `src/shared/FooCommon.cpp`, built by both. `FooCommon.h`
   declares what crosses the split: shared helpers the apps call, and the
   functions each app implements for the shared code (`// implemented by each
-  app`). Put a function there instead of writing it twice. A new shared file
+app`). Put a function there instead of writing it twice. A new shared file
   goes in `premake5.files.lua`, `ng-shared.ts` and `ng-targets.ts`.
 - Ng follows the same coding and commit rules, including **no automatic commits**.
 
@@ -183,8 +183,9 @@ Use `cmd/ng-gen-commands.ts` and `cmd/ng-gen-settings.ts` for ng generated
 files. `ng-gen-embedded.ts` generates ignored `src/ng/EmbeddedData*.cpp`;
 Translations come from `bun cmd/trans-dl.ts`, which writes
 `.work/translations.txt` from apptranslator and needs the maintainer's
-`TRANS_UPLOAD_SECRET`; without it the file is empty and the build is
-English only, by design. The manual uses the original website checkout
+`TRANS_UPLOAD_SECRET`. Without a nonempty cache, builds use the committed
+`translations/fallback.txt`; regenerate it with `bun cmd/update-local-translations.ts`.
+The manual uses the original website checkout
 and `.work/docs` staging; CI skips it when that checkout is absent.
 
 Standard Windows CI builds ng x64 release and runs its unit tests. Daily Windows CI builds debug

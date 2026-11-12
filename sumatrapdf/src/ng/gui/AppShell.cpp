@@ -839,6 +839,8 @@ TempStr AppShellUiStateTemp(MainWindow* win) {
         out.Append(fmt(" view=%d,%d zoom=%.1f", vp.x, vp.y, (double)dm->GetZoomReal(dm->CurrentPageNo())));
     }
     out.Append(ContextNotesActionsStateTemp(win));
+    out.Append(fmt(" language=%s systemLanguage=%s followsSystemLanguage=%d", trans::GetCurrentLangCode(),
+                   trans::DetectUserLang(), gSettings->followSystemLanguage ? 1 : 0));
     out.Append(fmt(" notesVisible=%d notesReady=%d reflowVisible=%d reflowReady=%d", ContextNotesVisible(win),
                    ContextNotesReady(win), ReflowDocumentVisible(win), ReflowDocumentReady(win)));
     out.Append(fmt(" annotHover=%d", IsAnnotationHoverOverlayVisible(win) ? 1 : 0));

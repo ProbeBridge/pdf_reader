@@ -2375,6 +2375,7 @@ const globalPrefs: Field[] = [
       "a whitespace separated list of passwords to try when opening a password protected document " +
         "(passwords containing spaces must be quoted)",
     ),
+  field("FollowSystemLanguage", Bool, true, "follow the system UI language on startup"),
   field("UiLanguage", Str, null, "ISO code of the current UI language").doc(
     "[ISO code](langs.html) of the current UI language",
   ),

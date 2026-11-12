@@ -926,6 +926,8 @@ struct Settings {
     // predefined text inserted as a free text annotation from the context
     // menu or the command palette
     Vec<TextSnippet*>* textSnippets;
+    // follow the system UI language on startup
+    bool followSystemLanguage;
     // if true, the Annotations window shows the selected annotation's note
     // under the list
     bool annotationsWindowShowNote;

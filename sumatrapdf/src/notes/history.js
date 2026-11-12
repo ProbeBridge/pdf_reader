@@ -9,7 +9,7 @@ function showStats(visible) {
   statsVisible = visible;
   $("aside h1").textContent = visible ? text("阅读统计", "Reading statistics") : text("阅读历史", "Reading history");
   $("aside p").textContent = visible
-    ? text("记录每天的阅读与生词积累", "Daily reading and vocabulary")
+    ? text("页数、注释数与阅读时间", "Pages, annotations and reading time")
     : text("按时间浏览读过的文档", "Documents you have opened");
   $("#history-panel").hidden = visible;
   $("#stats-panel").hidden = !visible;

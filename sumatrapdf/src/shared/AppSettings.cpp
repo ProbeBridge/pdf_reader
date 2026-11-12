@@ -788,7 +788,9 @@ bool LoadSettings() {
     SetEngineeringDrawingEnhanceMode(gSettings->engineeringDrawingEnhance);
     ExplorerQuickLookApplyFromSettings();
 
-    if (trans::ValidateLangCode(gprefs->uiLanguage)) {
+    if (gprefs->followSystemLanguage) {
+        SetCurrentLang(trans::DetectUserLang());
+    } else if (trans::ValidateLangCode(gprefs->uiLanguage)) {
         SetCurrentLang(gprefs->uiLanguage);
     } else {
         // guess the ui language on first start

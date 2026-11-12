@@ -16,6 +16,7 @@
   border-color: var(--accent-border);
 }
 .stats-heading,
+.stats-chart-heading,
 .stats-axis {
   display: flex;
   align-items: center;
@@ -54,48 +55,55 @@
 .stat-card strong {
   font-size: clamp(18px, 2.4vw, 28px);
 }
-.stats-legend {
+.stats-charts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.stats-chart-heading {
   display: flex;
-  gap: 20px;
+  align-items: baseline;
+}
+.stats-chart h3 {
+  font-size: 13px;
+  margin: 0;
+}
+.stats-scale {
   font-size: 12px;
+  color: var(--muted);
 }
-.stats-legend span::before {
-  content: "";
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  margin-right: 6px;
+.stats-chart {
+  --bar-color: var(--accent);
 }
-.reading-legend::before,
-.reading-bar {
-  background: var(--accent);
+.stats-chart[data-metric="annotations"] {
+  --bar-color: #3164b5;
 }
-.words-legend::before,
-.words-bar {
-  background: #3164b5;
+.stats-chart[data-metric="seconds"] {
+  --bar-color: #15806d;
 }
-:root[data-theme="dark"] .words-legend::before,
-:root[data-theme="dark"] .words-bar {
-  background: #80b5ff;
+:root[data-theme="dark"] .stats-chart[data-metric="annotations"] {
+  --bar-color: #80b5ff;
+}
+:root[data-theme="dark"] .stats-chart[data-metric="seconds"] {
+  --bar-color: #63d6b1;
 }
 .stats-bars {
   display: grid;
-  grid-template-columns: repeat(var(--days), minmax(0, 1fr));
+  grid-template-columns: repeat(var(--points), minmax(0, 1fr));
   align-items: end;
-  gap: 1px;
-  height: 145px;
+  gap: 3px;
+  height: 125px;
   margin-top: 18px;
   border-bottom: 1px solid var(--divider);
 }
-.stats-pair {
+.stats-point {
   display: flex;
   align-items: end;
-  gap: 1px;
   height: 100%;
 }
-.stats-pair span {
+.stats-bar {
   flex: 1;
+  background: var(--bar-color);
   border-radius: 2px 2px 0 0;
 }
 .stats-axis,
@@ -106,6 +114,10 @@
 }
 .stats-axis {
   margin-top: 8px;
+  align-items: start;
+}
+.stats-axis span:last-child {
+  text-align: right;
 }
 .stats-table {
   width: 100%;
@@ -146,5 +158,11 @@
   }
   .stat-card {
     padding: 12px 8px;
+  }
+  .stats-charts {
+    grid-template-columns: 1fr;
+  }
+  .stats-heading {
+    flex-wrap: wrap;
   }
 }

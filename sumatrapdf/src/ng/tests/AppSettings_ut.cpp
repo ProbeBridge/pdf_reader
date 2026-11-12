@@ -32,6 +32,7 @@ void AppSettingsTest() {
     // the defaults serialize to the golden file, with those substitutions
     Settings* def = NewSettings({});
     utassert(def != nullptr);
+    utassert(def->followSystemLanguage);
     Str serialized = SerializeSettings(def, {}, SerializeOpt::All);
     utassert(str::Eq(serialized, expect));
     str::Free(serialized);

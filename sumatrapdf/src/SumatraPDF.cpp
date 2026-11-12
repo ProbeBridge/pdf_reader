@@ -8057,6 +8057,7 @@ void SetCurrentLanguageAndRefreshUI(Str langCode) {
     if (len(langCode) == 0 || str::Eq(langCode, trans::GetCurrentLangCode())) {
         return;
     }
+    gSettings->followSystemLanguage = false;
     SetCurrentLang(langCode);
 
     for (MainWindow* win : gWindows) {

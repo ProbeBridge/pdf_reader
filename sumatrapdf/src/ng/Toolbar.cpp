@@ -68,6 +68,7 @@
 // --- availability and enabled state -----------------------------------------
 
 static bool IsCmdChecked(MainWindow* win, int cmdId) {
+    if (OriginalCommandId(cmdId) == CmdToggleLightDarkTheme) return !IsLightColor(ThemeWindowBackgroundColor());
     if (!win->IsDocLoaded()) {
         return false;
     }
@@ -1165,7 +1166,7 @@ static gp::El* ToolbarButton(MainWindow* win, gp::Ctx* cx, int idx, const Toolba
     bool noTranslate = idx >= gLayoutButtonsCount;
     if (bi.isText || reflow) {
         Str label = noTranslate ? bi.toolTip : trans::GetTranslation(bi.toolTip);
-        if (reflow) label = ReflowDocumentVisible(win) ? StrL("重排：开") : StrL("重排：关");
+        if (reflow) label = ReflowDocumentVisible(win) ? Tr("Reflow: On") : Tr("Reflow: Off");
         b->Child(gp::TextEl(cx->a, GpuiDup(cx->a, label))->Font(13)->Fg(ToGpui(fg)));
         return b;
     }

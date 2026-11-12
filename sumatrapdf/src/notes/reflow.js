@@ -4,6 +4,22 @@ const $ = (selector) => document.querySelector(selector),
   zh = navigator.language.startsWith("zh");
 const call = (action, data = {}) => globalThis.__sumatra__.call("reflow", JSON.stringify({ action, ...data }));
 const say = (cn, en) => (zh ? cn : en);
+document.documentElement.lang = navigator.language;
+document.title = say("正文重排", "Text reflow");
+for (const [selector, cn, en] of [
+  ["#previous", "上一页", "Previous page"],
+  ["#next", "下一页", "Next page"],
+  ["#annotate", "AI 注释选中文本", "Annotate selected text"],
+  ["#original", "原版", "Original view"],
+  ["#focus-note", "查看注释", "View annotation"],
+  ["#delete-note", "删除", "Delete"],
+])
+  $(selector).textContent = say(cn, en);
+const speakLabel = say("朗读原文", "Read aloud");
+$("#speak-note").title = speakLabel;
+$("#speak-note").setAttribute("aria-label", speakLabel);
+$("#note-actions").setAttribute("aria-label", say("注释操作", "Annotation actions"));
+$("nav").setAttribute("aria-label", say("重排阅读", "Reflow reading"));
 let info,
   notes = [],
   clickEnabled = true,
@@ -50,17 +66,6 @@ function fitTables() {
     const limit = Math.max(0.5, (available / columns - border) / (glyph + padding));
     table.style.fontSize = `${Math.min(target, limit)}px`;
   }
-}
-if (!zh) {
-  $("#previous").textContent = "Previous page";
-  $("#next").textContent = "Next page";
-  $("#annotate").textContent = "AI note on selected text";
-  $("#original").textContent = "Original view";
-  $("#focus-note").textContent = "View note";
-  $("#speak-note").title = "Read source text";
-  $("#speak-note").setAttribute("aria-label", "Read source text");
-  $("#note-actions").setAttribute("aria-label", "Note actions");
-  $("#delete-note").textContent = "Delete";
 }
 function label() {
   $("#page-label").textContent = `${current} / ${info.pageCount} · ${zoom}%`;

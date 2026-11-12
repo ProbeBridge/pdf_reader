@@ -76,7 +76,10 @@ export async function packEmbedded(
   }
   const translations = join(inputRoot, ".work/translations.txt");
   if (!existsSync(translations)) writeChanged(translations, "");
-  inputs.set("translations.txt", translations);
+  inputs.set(
+    "translations.txt",
+    statSync(translations).size > 0 ? translations : join(inputRoot, "translations/fallback.txt"),
+  );
   for (const name of extScripts) inputs.set(name, join(inputRoot, "ext", name));
   if (opts.fonts) {
     for (const [forge, patterns] of fontPatterns) {

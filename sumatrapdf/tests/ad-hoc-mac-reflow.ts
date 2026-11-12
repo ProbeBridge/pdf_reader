@@ -11,12 +11,13 @@ export async function testit() {
   const pipe = `reflow-${process.pid}-${Date.now()}`;
   writeFileSync(
     join(dir, "SumatraPDF-settings.txt"),
-    "RestoreSession = false\nCheckForUpdates = false\nUiLanguage = en\nTheme = Light\n",
+    "RestoreSession = false\nCheckForUpdates = false\nUiLanguage = cn\nTheme = Light\n",
   );
   const child = spawn(
     process.env.SUMATRA_TEST_EXE || resolve("out/mac/dbg/SumatraPDF"),
     [
       "-for-testing",
+      ...(process.env.SUMATRA_TEST_NATIVE_LANG ? ["-lang", process.env.SUMATRA_TEST_NATIVE_LANG] : []),
       "-appdata",
       dir,
       "-dbg-control",
@@ -91,12 +92,29 @@ export async function testit() {
       () => request("TestCurrentTab"),
       (s) => s.includes("zlib.3.pdf"),
     );
+    const languageState = await request("TestUiState");
+    const language = / language=(\S+)/.exec(languageState)![1];
+    const systemLanguage = / systemLanguage=(\S+)/.exec(languageState)![1];
+    assert.equal(
+      language,
+      process.env.SUMATRA_TEST_NATIVE_LANG || systemLanguage,
+      "Default UI language must follow the system instead of the saved legacy language",
+    );
+    const menu = await request("TestMainMenu");
+    if (language === "cn") assert.ok(menu.includes("文件"), "The Chinese native translation catalog must be bundled");
     const toolbar = await until(
       () => request("TestToolbarButtons"),
       (s) => /text=Reflow document text/.test(s),
     );
     const reflow = toolbarRect(toolbar, "Reflow document text");
     const zoom = toolbarRect(toolbar, "Zoom In");
+    const theme = toolbarRect(toolbar, "Toggle Light/Dark Theme");
+    await request(
+      "TestInput",
+      "click",
+      Math.round((theme[0]! + theme[2]!) / 2),
+      Math.round((theme[1]! + theme[3]!) / 2),
+    );
     assert.ok(reflow[2]! - reflow[0]! > zoom[2]! - zoom[0]! + 16, "Reflow text switch needs room for its on/off label");
     await reflowMenu(false);
     await clickReflow();
@@ -109,24 +127,26 @@ export async function testit() {
       (s) => s.toLowerCase().includes("zlib"),
     );
     await reflowMenu(true);
-    assert.equal(await evaluate("reflow", "document.documentElement.dataset.theme"), "light");
+    assert.equal(await evaluate("reflow", "document.documentElement.dataset.theme"), "dark");
+    const originalLabel = await evaluate("reflow", "navigator.language.startsWith('zh') ? '原版' : 'Original view'");
+    assert.equal(await evaluate("reflow", "document.querySelector('#original').textContent"), originalLabel);
     console.log("PASS visible text switch opens real PDF reflow; View menu and check state are available");
 
     await evaluate("reflow", "(document.querySelector('[data-theme-toggle]').click(),true)");
     await until(
       async () => String(await evaluate("reflow", "document.documentElement.dataset.theme")),
-      (s) => s === "dark",
+      (s) => s === "light",
     );
     await request("TestInvokeCommand", "CmdContextNotes");
     await until(
       () => request("TestUiState"),
       (s) => s.includes("notesReady=1"),
     );
-    assert.equal(await evaluate("notes", "document.documentElement.dataset.theme"), "dark");
+    assert.equal(await evaluate("notes", "document.documentElement.dataset.theme"), "light");
     await evaluate("notes", "(document.querySelector('[data-theme-toggle]').click(),true)");
     await until(
       async () => String(await evaluate("reflow", "document.documentElement.dataset.theme")),
-      (s) => s === "light",
+      (s) => s === "dark",
     );
     console.log("PASS dark/light theme changes stay synchronized between native notes and reflow");
 
@@ -135,7 +155,8 @@ export async function testit() {
       async () => String(await evaluate("reflow", "document.querySelector('#page-label').textContent")),
       (s) => s.includes("110%"),
     );
-    await evaluate("reflow", "(document.querySelector('#original').click(),true)");
+    // Hiding WKWebView can suspend its JS reply; observe the native view state.
+    await request("TestUiState", "notes", "reflow", "document.querySelector('#original').click()");
     await until(
       () => request("TestUiState"),
       (s) => s.includes("reflowVisible=0"),

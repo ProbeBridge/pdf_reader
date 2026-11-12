@@ -72,7 +72,9 @@ if exist "%WORK%\docs\" (
   if exist "%STAGING%\" rmdir /s /q "%STAGING%"
 )
 if not exist "%STAGING%\" mkdir "%STAGING%"
-copy /y "%WORK%\translations.txt" "%STAGING%\translations.txt" >nul || exit /b 1
+set TRANSLATIONS=%WORK%\translations.txt
+for %%F in ("%TRANSLATIONS%") do if %%~zF EQU 0 set TRANSLATIONS=%ROOT%\translations\fallback.txt
+copy /y "%TRANSLATIONS%" "%STAGING%\translations.txt" >nul || exit /b 1
 if exist "%WORK%\scripts.js" (
   copy /y "%WORK%\scripts.js" "%STAGING%\scripts.js" >nul || exit /b 1
 ) else (

@@ -3,6 +3,7 @@
 
 extern const char* gIconFileOpen;
 extern const char* gIconPrint;
+extern const char* gIconTheme;
 extern const char* gIconPagePrev;
 extern const char* gIconPageNext;
 extern const char* gIconChapterPrev;

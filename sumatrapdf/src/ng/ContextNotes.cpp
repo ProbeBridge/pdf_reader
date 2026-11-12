@@ -15,6 +15,7 @@
 #include "EngineBase.h"
 #include "DisplayModel.h"
 #include "ReflowDocument.h"
+#include "Translations.h"
 #include "SvgIcons.h"
 #include "NotesPlatform.h"
 #include "gui/AppShell.h"
@@ -369,7 +370,7 @@ gp::El* ContextNotesActionsBuild(MainWindow* win, gp::Ctx* cx) {
                      ->Bg(theme.tokens.popover)
                      ->Border(1, theme.border);
     const char* icons[] = {gIconSpeak, gIconTrash};
-    const Str labels[] = {StrL("朗读 / Play"), StrL("删除注释 / Delete note")};
+    const Str labels[] = {Tr("Read Aloud"), Tr("Delete annotation")};
     for (int i = 0; i < 2; i++) {
         auto* icon = gpc::Icon::Empty(cx)->Data(ToGpui(Str(icons[i])));
         auto* button = gpc::Button::New(cx, GpuiDup(cx->a, i == 0 ? StrL("note-play") : StrL("note-delete")))
