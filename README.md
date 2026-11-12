@@ -24,6 +24,8 @@
 
 相邻页面页边重复出现的内容会分别放到页眉、页脚区域，保留标志、文字和页码的左、中、右对齐关系。
 
+目录缩放先更新可见条目，长标题换行分批测量；原生字体及完整滚动范围在鼠标键盘空闲后同步，保留选中项、展开状态和正文位置。
+
 | 快捷键                           | 操作               |
 | -------------------------------- | ------------------ |
 | `Alt+Shift+A`                    | 为选中文字生成注释 |
@@ -86,6 +88,7 @@ npm run test:click        # 单击注释
 npm run test:perf         # 原生性能
 npm run test:home         # 旧历史封面与启动回归
 npx bun tests/toc-zoom.ts      # 目录缩放与设置保留
+npx bun tests/toc-zoom-perf.ts # 6000 项目录的缩放响应、滚动范围和筛选
 npx bun tests/notes-width.ts   # 右侧注释栏宽度
 npx bun tests/reflow-native.ts # 原生重排、表格图片与注释
 ```

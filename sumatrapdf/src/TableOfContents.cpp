@@ -5,6 +5,7 @@
 #include "gui/Dpi.h"
 #include "base/File.h"
 #include "base/UITask.h"
+#include "base/Timer.h"
 #include "base/Win.h"
 
 #include "gui/UIModels.h"
@@ -835,6 +836,9 @@ static void OnTocMeasureLines(TreeView::MeasureLinesEvent* ev) {
     ReleaseDC(tv->hwnd, hdc);
 }
 
+static HWND gTocMeasureHwnd = nullptr;
+static HWND gTocPlainMeasureHwnd = nullptr;
+
 // POSTPAINT: redraw title (optional filter highlight), optional right-aligned
 // page label, and multi-match "current page" highlight (issue #4642).
 static void DrawTocItemPostPaint(TreeView::CustomDrawEvent* ev, MainWindow* win) {
@@ -844,6 +848,12 @@ static void DrawTocItemPostPaint(TreeView::CustomDrawEvent* ev, MainWindow* win)
     }
 
     TreeView* tv = ev->treeView;
+    NMTVCUSTOMDRAW* tvcd = ev->nm;
+    NMCUSTOMDRAW* cd = &tvcd->nmcd;
+    // Row-bound queries walk the expanded outline; only real visible paints
+    // need them, never empty/offscreen notifications.
+    Rect paintRect = ToRect(cd->rc);
+    if (paintRect.IsEmpty() || paintRect.Bottom() <= 0 || paintRect.y >= HwndClientRect(tv->hwnd).dy) return;
     Rect labelRect{};
     if (!tv->GetItemRect(ev->treeItem, true, labelRect)) {
         return;
@@ -851,12 +861,7 @@ static void DrawTocItemPostPaint(TreeView::CustomDrawEvent* ev, MainWindow* win)
     Rect itemRect{};
     tv->GetItemRect(ev->treeItem, false, itemRect);
 
-    NMTVCUSTOMDRAW* tvcd = ev->nm;
     HDC hdc = tvcd->nmcd.hdc;
-    NMCUSTOMDRAW* cd = &tvcd->nmcd;
-    if (cd->rc.right <= cd->rc.left || cd->rc.bottom <= cd->rc.top) {
-        return;
-    }
 
     // POSTPAINT often omits CDIS_SELECTED; also check the control selection.
     bool isTreeSelected = (cd->uItemState & CDIS_SELECTED) != 0;
@@ -980,7 +985,15 @@ void OnTocCustomDraw(TreeView::CustomDrawEvent* ev) {
     NMCUSTOMDRAW* cd = &(tvcd->nmcd);
 
     if (cd->dwDrawStage == CDDS_PREPAINT) {
-        ev->result = CDRF_NOTIFYITEMDRAW;
+        ev->result = gTocPlainMeasureHwnd == ev->treeView->hwnd ? CDRF_DODEFAULT : CDRF_NOTIFYITEMDRAW;
+        return;
+    }
+
+    if (gTocMeasureHwnd == ev->treeView->hwnd) {
+        if (cd->dwDrawStage == CDDS_ITEMPREPAINT && ev->treeItem) {
+            UpdateFont(cd->hdc, ((TocItem*)ev->treeItem)->fontFlags, ev->treeView->hwnd);
+            ev->result = CDRF_NEWFONT;
+        }
         return;
     }
 
@@ -1022,10 +1035,8 @@ void OnTocCustomDraw(TreeView::CustomDrawEvent* ev) {
         } else if (tocItem->color != kColorUnset) {
             tvcd->clrText = tocItem->color;
         }
-        if (tocItem->fontFlags != 0) {
-            UpdateFont(cd->hdc, tocItem->fontFlags, tv->hwnd);
-            res |= CDRF_NEWFONT;
-        }
+        UpdateFont(cd->hdc, tocItem->fontFlags, tv->hwnd);
+        res |= CDRF_NEWFONT;
         // POSTPAINT: selection colors (issue #5848), page numbers, filter, multi-match.
         bool needPost = isSelected || filterActive || (showPageNumbers && tocItem->pageNo > 0) ||
                         (multiHighlight && isMultiMatch) || tv->wrapText;
@@ -1228,6 +1239,252 @@ constexpr int kTocMinFontSize = 9;
 constexpr int kTocMaxFontSize = 64;
 constexpr int kTocFontStep = 2;
 
+// Native WM_SETFONT measures every title synchronously. Use custom-draw
+// fonts, update the viewport immediately, and remeasure wrapped rows in slices.
+constexpr UINT_PTR kTocFontTimer = 0x544F4346; // TOCF
+constexpr int kTocFontBatchMs = 8;
+constexpr int kTocFontBatchItems = 32;
+constexpr DWORD kTocFontIdleMs = 2500;
+constexpr int kTocFontPollMs = 100;
+struct TocFontLayout {
+    HWND hwnd = nullptr;
+    HTREEITEM next = nullptr;
+    HTREEITEM firstVisible = nullptr;
+    bool dirty = false;
+    bool refreshing = false;
+    bool commitPending = false;
+    bool committing = false;
+    int paintHold = 0;
+    int measured = 0;
+    HFONT nativeFont = nullptr;
+    DWORD changedAt = 0;
+    double maxSliceMs = 0;
+    double commitMs = 0;
+    DWORD idleMs = 0;
+};
+static Vec<TocFontLayout*> gTocFontLayouts;
+
+static TocFontLayout* FindTocFontLayout(HWND hwnd) {
+    for (auto* layout : gTocFontLayouts) {
+        if (layout->hwnd == hwnd) return layout;
+    }
+    return nullptr;
+}
+
+static TocFontLayout* GetTocFontLayout(HWND hwnd) {
+    if (auto* layout = FindTocFontLayout(hwnd)) return layout;
+    auto* layout = new TocFontLayout();
+    layout->hwnd = hwnd;
+    VecAppend(gTocFontLayouts, layout);
+    return layout;
+}
+
+static void CancelTocFontLayout(HWND hwnd) {
+    KillTimer(hwnd, kTocFontTimer);
+    if (auto* layout = FindTocFontLayout(hwnd)) {
+        layout->next = nullptr;
+        layout->dirty = false;
+        layout->firstVisible = nullptr;
+        layout->commitPending = false;
+    }
+}
+
+static void HoldTocPaint(TreeView* tree) {
+    if (auto* layout = FindTocFontLayout(tree->hwnd)) layout->paintHold++;
+}
+
+static void ReleaseTocPaint(TreeView* tree) {
+    if (auto* layout = FindTocFontLayout(tree->hwnd)) {
+        layout->paintHold--;
+        if (layout->paintHold == 0) HwndInvalidate(tree->hwnd, false);
+    }
+}
+
+static HTREEITEM NextTocFontItem(HWND hwnd, HTREEITEM item) {
+    if (HTREEITEM child = TreeView_GetChild(hwnd, item)) return child;
+    for (; item; item = TreeView_GetParent(hwnd, item)) {
+        if (HTREEITEM next = TreeView_GetNextSibling(hwnd, item)) return next;
+    }
+    return nullptr;
+}
+
+enum class TocFontPass {
+    Visible,
+    Wrapping
+};
+
+static void RefreshTocFontItem(TreeView* tree, HTREEITEM handle, TocFontPass pass) {
+    TVITEMEXW it{};
+    it.mask = TVIF_PARAM | TVIF_INTEGRAL;
+    it.hItem = handle;
+    if (!TreeView_GetItem(tree->hwnd, &it)) return;
+    auto* item = (TocItem*)it.lParam;
+    if (!item) return;
+    it.mask = 0;
+    if (pass == TocFontPass::Visible) {
+        it.mask = TVIF_TEXT;
+        it.pszText = CWStrTemp(item->title);
+    }
+    if (tree->wrapText) {
+        int depth = 0;
+        for (HTREEITEM p = TreeView_GetParent(tree->hwnd, handle); p; p = TreeView_GetParent(tree->hwnd, p)) depth++;
+        int lines = tree->ItemLines((TreeItem)item, depth);
+        if (lines != it.iIntegral) {
+            it.mask |= TVIF_INTEGRAL;
+            it.iIntegral = lines;
+        }
+    }
+    if (it.mask != 0) TreeView_SetItem(tree->hwnd, &it);
+}
+
+static void RestoreTocFirst(TreeView* tree, HTREEITEM first) {
+    if (!first || first == TreeView_GetFirstVisible(tree->hwnd)) return;
+    HoldTocPaint(tree);
+    HWND previous = gTocMeasureHwnd;
+    gTocMeasureHwnd = tree->hwnd;
+    TreeView_Select(tree->hwnd, first, TVGN_FIRSTVISIBLE);
+    gTocMeasureHwnd = previous;
+    ReleaseTocPaint(tree);
+}
+
+static void RefreshTocViewport(TreeView* tree) {
+    auto* layout = FindTocFontLayout(tree->hwnd);
+    if (!layout || layout->refreshing) return;
+    HTREEITEM first = TreeView_GetFirstVisible(tree->hwnd);
+    if (first == layout->firstVisible) return;
+    layout->firstVisible = first;
+    layout->refreshing = true;
+    HoldTocPaint(tree);
+    HWND previous = gTocMeasureHwnd;
+    gTocMeasureHwnd = tree->hwnd;
+    int count = TreeView_GetVisibleCount(tree->hwnd) + 1;
+    for (HTREEITEM h = first; h && count--; h = TreeView_GetNextVisible(tree->hwnd, h)) {
+        RefreshTocFontItem(tree, h, TocFontPass::Visible);
+    }
+    gTocMeasureHwnd = previous;
+    RestoreTocFirst(tree, first);
+    layout->refreshing = false;
+    ReleaseTocPaint(tree);
+}
+
+static void StartTocFontLayout(TreeView* tree) {
+    auto* layout = GetTocFontLayout(tree->hwnd);
+    layout->dirty = false;
+    layout->next = tree->wrapText ? TreeView_GetRoot(tree->hwnd) : nullptr;
+    layout->firstVisible = nullptr;
+    layout->maxSliceMs = 0;
+    layout->commitMs = 0;
+    layout->idleMs = 0;
+    layout->measured = 0;
+    layout->commitPending = true;
+    RefreshTocViewport(tree);
+    SetTimer(tree->hwnd, kTocFontTimer, layout->next ? USER_TIMER_MINIMUM : kTocFontPollMs, nullptr);
+}
+
+static bool TocHasStyledFont(TocItem* item) {
+    for (; item; item = item->next) {
+        if (item->fontFlags != 0 || TocHasStyledFont(item->child)) return true;
+    }
+    return false;
+}
+
+static void PrimeTocFontMetrics(HWND hwnd) {
+    // Reset native per-item custom-draw flags offscreen. Uniform fonts need
+    // no thousands of fake draw notifications during the native width scan.
+    Rect rect = HwndClientRect(hwnd);
+    if (rect.IsEmpty()) return;
+    HDC dc = GetDC(hwnd);
+    if (!dc) return;
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, rect.dx, rect.dy);
+    if (memory && bitmap) {
+        HGDIOBJ previous = SelectObject(memory, bitmap);
+        SendMessageW(hwnd, WM_PRINTCLIENT, (WPARAM)memory, PRF_CLIENT);
+        SelectObject(memory, previous);
+    }
+    if (bitmap) DeleteObject(bitmap);
+    if (memory) DeleteDC(memory);
+    ReleaseDC(hwnd, dc);
+}
+
+static void CommitTocFont(TreeView* tree, TocFontLayout* layout) {
+    LASTINPUTINFO input{sizeof(input)};
+    DWORD now = GetTickCount();
+    DWORD idle = now - layout->changedAt;
+    HWND foreground = GetForegroundWindow();
+    if (GetAncestor(foreground, GA_ROOTOWNER) == GetAncestor(tree->hwnd, GA_ROOTOWNER)) {
+        if (!GetLastInputInfo(&input)) return;
+        idle = std::min(idle, now - input.dwTime);
+    }
+    if (idle < kTocFontIdleMs) return;
+
+    // The native control's full width scan cannot be sliced. Coalesce it until
+    // mouse/keyboard input is idle; visible rows already use the new font.
+    TimeStamp start = TimeGet();
+    HTREEITEM first = TreeView_GetFirstVisible(tree->hwnd);
+    HoldTocPaint(tree);
+    layout->committing = true;
+    HWND previous = gTocMeasureHwnd;
+    gTocMeasureHwnd = tree->hwnd;
+    HWND previousPlain = gTocPlainMeasureHwnd;
+    if (tree->treeModel && !TocHasStyledFont((TocItem*)tree->treeModel->Root())) {
+        gTocPlainMeasureHwnd = tree->hwnd;
+        PrimeTocFontMetrics(tree->hwnd);
+    }
+    HFONT font = tree->GetHFont();
+    if (font != layout->nativeFont) {
+        SendMessageW(tree->hwnd, WM_SETFONT, (WPARAM)font, FALSE);
+        layout->nativeFont = font;
+    } else {
+        TreeView_SetIndent(tree->hwnd, TreeView_GetIndent(tree->hwnd));
+    }
+    gTocPlainMeasureHwnd = previousPlain;
+    gTocMeasureHwnd = previous;
+    RestoreTocFirst(tree, first);
+    layout->committing = false;
+    layout->commitPending = false;
+    layout->commitMs = TimeSinceInMs(start);
+    layout->idleMs = idle;
+    KillTimer(tree->hwnd, kTocFontTimer);
+    ReleaseTocPaint(tree);
+}
+
+static void ContinueTocFontLayout(TreeView* tree) {
+    auto* layout = FindTocFontLayout(tree->hwnd);
+    if (!layout) return;
+    if (!layout->next && !layout->dirty) {
+        if (layout->commitPending) CommitTocFont(tree, layout);
+        return;
+    }
+    TimeStamp start = TimeGet();
+    HTREEITEM first = TreeView_GetFirstVisible(tree->hwnd);
+    HoldTocPaint(tree);
+    if (layout->dirty) StartTocFontLayout(tree);
+    bool batchRedraw = tree->wrapText && (GetWindowLongPtrW(tree->hwnd, GWL_STYLE) & WS_VISIBLE);
+    HWND previous = gTocMeasureHwnd;
+    gTocMeasureHwnd = tree->hwnd;
+    // Integral-only updates can batch native layout and scrollbar drawing.
+    if (batchRedraw) tree->SuspendRedraw();
+    int count = kTocFontBatchItems;
+    while (layout->next && count--) {
+        HTREEITEM current = layout->next;
+        layout->next = NextTocFontItem(tree->hwnd, current);
+        // Offscreen wrapped rows only need new heights. Replacing their text
+        // also remeasures native widths and repaints on every item.
+        RefreshTocFontItem(tree, current, TocFontPass::Wrapping);
+        layout->measured++;
+        if (TimeSinceInMs(start) >= kTocFontBatchMs) break;
+    }
+    if (!layout->next) {
+        SetTimer(tree->hwnd, kTocFontTimer, kTocFontPollMs, nullptr);
+    }
+    if (batchRedraw) tree->ResumeRedraw();
+    gTocMeasureHwnd = previous;
+    RestoreTocFirst(tree, first);
+    ReleaseTocPaint(tree);
+    layout->maxSliceMs = std::max(layout->maxSliceMs, TimeSinceInMs(start));
+}
+
 static void UpdateTocZoomLabel(MainWindow* win) {
     if (!win->tocZoomButtons[1]) {
         return;
@@ -1272,8 +1529,15 @@ static void ChangeTocFontSize(MainWindow* win, int steps) {
             if (!tree || !tree->hwnd) {
                 continue;
             }
+            HTREEITEM first = TreeView_GetFirstVisible(tree->hwnd);
+            if (tree == other->tocTreeView) {
+                GetTocFontLayout(tree->hwnd);
+                HoldTocPaint(tree);
+            }
             HwndSetTreeFontForDpi(tree->hwnd, font->GetHFont(), dpi);
-            tree->RemeasureItems();
+            if (tree != other->tocTreeView) tree->RemeasureItems();
+            RestoreTocFirst(tree, first);
+            if (tree == other->tocTreeView) ReleaseTocPaint(tree);
             HwndInvalidate(tree->hwnd, false);
         }
         UpdateTocZoomLabel(other);
@@ -1304,6 +1568,52 @@ static void OnTocZoomIn(MainWindow* win, VirtMouseEvent*) {
 
 static LRESULT CALLBACK WndProcTocZoom(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR subclassId, DWORD_PTR data) {
     MainWindow* win = (MainWindow*)data;
+    TreeView* tree = win->tocTreeView;
+    if (tree && tree->hwnd == hwnd) {
+        if (msg == WM_NCDESTROY) {
+            CancelTocFontLayout(hwnd);
+            if (auto* layout = FindTocFontLayout(hwnd)) {
+                VecRemove(gTocFontLayouts, layout);
+                delete layout;
+            }
+        } else if (msg == TVM_DELETEITEM) {
+            // Cancel before handles or their model items become invalid.
+            CancelTocFontLayout(hwnd);
+        } else if (msg == WM_SETFONT && TreeView_GetCount(hwnd) == 0) {
+            if (auto* layout = FindTocFontLayout(hwnd)) layout->nativeFont = (HFONT)wp;
+        } else if (msg == WM_SETFONT && TreeView_GetCount(hwnd) > 0) {
+            auto* layout = GetTocFontLayout(hwnd);
+            if (layout->committing) return DefSubclassProc(hwnd, msg, wp, lp);
+            if (!layout->nativeFont) layout->nativeFont = tree->GetHFont();
+            tree->font = GetPlatformFont((HFONT)wp);
+            layout->changedAt = GetTickCount();
+            layout->dirty = true;
+            SetTimer(hwnd, kTocFontTimer, USER_TIMER_MINIMUM, nullptr);
+            HwndSetFont(tree->GetToolTipsHwnd(), (HFONT)wp);
+            if (lp) HwndInvalidate(hwnd, false);
+            return 0;
+        } else if (msg == TVM_SETITEMHEIGHT || msg == TVM_INSERTITEMW || msg == TVM_SETITEMW) {
+            HWND previous = gTocMeasureHwnd;
+            gTocMeasureHwnd = hwnd;
+            LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
+            gTocMeasureHwnd = previous;
+            auto* layout = FindTocFontLayout(hwnd);
+            if (msg == TVM_SETITEMHEIGHT && layout && layout->dirty) StartTocFontLayout(tree);
+            return result;
+        } else if (msg == WM_TIMER && wp == kTocFontTimer) {
+            ContinueTocFontLayout(tree);
+            return 0;
+        } else if (msg == WM_PAINT) {
+            auto* layout = FindTocFontLayout(hwnd);
+            if (layout && layout->paintHold > 0) {
+                // Native scrolling paints synchronously. Coalesce those paints
+                // without WM_SETREDRAW, whose resume rescans every title.
+                ValidateRect(hwnd, nullptr);
+                return 0;
+            }
+            if (layout && (layout->next || layout->commitPending)) RefreshTocViewport(tree);
+        }
+    }
     if (msg == WM_MOUSEWHEEL) {
         if (GET_KEYSTATE_WPARAM(wp) & MK_CONTROL) {
             win->tocZoomWheel += GET_WHEEL_DELTA_WPARAM(wp);
@@ -1378,11 +1688,22 @@ TempStr TocRowsResultTemp(int* exitCodeOut) {
     *exitCodeOut = 0;
     HWND hwnd = tv->hwnd;
     str::Builder out;
-    int width = HwndClientRect(hwnd).dx;
-    out.Append(fmt("OK rowDy=%d width=%d wrap=%d\n", TreeView_GetItemHeight(hwnd), width, tv->wrapText ? 1 : 0));
+    Rect clientRect = HwndClientRect(hwnd);
+    int width = clientRect.dx;
+    RECT label{};
+    TreeView_GetItemRect(hwnd, TreeView_GetRoot(hwnd), &label, TRUE);
+    auto* layout = FindTocFontLayout(hwnd);
+    out.Append(
+        fmt("OK rowDy=%d width=%d wrap=%d labelDx=%d fontPending=%d fontSliceMs=%.2f fontCommitMs=%.2f fontIdleMs=%lu "
+            "fontMeasured=%d fontWorkPending=%d\n",
+            TreeView_GetItemHeight(hwnd), width, tv->wrapText ? 1 : 0, (int)(label.right - label.left),
+            layout && (layout->next || layout->dirty || layout->commitPending), layout ? layout->maxSliceMs : 0,
+            layout ? layout->commitMs : 0, layout ? layout->idleMs : 0, layout ? layout->measured : 0,
+            layout && layout->next));
     for (HTREEITEM h = TreeView_GetFirstVisible(hwnd); h; h = TreeView_GetNextVisible(hwnd, h)) {
         RECT rc{};
         TreeView_GetItemRect(hwnd, h, &rc, FALSE);
+        if (rc.top >= clientRect.dy) break;
         TocItem* item = (TocItem*)tv->GetTreeItemByHandle(h);
         out.Append(
             fmt("row y=%d dy=%d title=%s\n", (int)rc.top, (int)(rc.bottom - rc.top), item ? item->title : Str{}));
@@ -1424,6 +1745,7 @@ void CreateToc(MainWindow* win) {
     treeView->onClick = MkFunc1Void(TocTreeClick);
 
     treeView->Create(args);
+    SendMessageW(treeView->hwnd, CCM_SETVERSION, 5, 0);
     ReportIf(!treeView->hwnd);
     // Wrapping enables odd item heights; set it before the native control rounds the row height.
     treeView->SetWrapText(gSettings->tocWrapText);

@@ -650,12 +650,12 @@ void TreeView::OnNotifyReflect(ControlBase::NotifyReflectEvent* rev) {
         TreeView::CustomDrawEvent ev;
         ev.treeView = w;
         ev.nm = (NMTVCUSTOMDRAW*)lp;
-        HTREEITEM hItem = (HTREEITEM)ev.nm->nmcd.dwItemSpec;
-        // it can be 0 in CDDS_PREPAINT state
-        ev.treeItem = GetTreeItemByHandle(hItem);
+        DWORD drawStage = ev.nm->nmcd.dwDrawStage;
+        // Custom draw already carries the model item. Avoid querying the tree
+        // for every item in the native font-measurement pass.
+        ev.treeItem = (drawStage & CDDS_ITEM) ? (TreeItem)ev.nm->nmcd.lItemlParam : TreeModel::kNullItem;
         // allow CDDS_PREPAINT through even with null treeItem
         // so the handler can return CDRF_NOTIFYITEMDRAW
-        DWORD drawStage = ev.nm->nmcd.dwDrawStage;
         if (!ev.treeItem && drawStage != CDDS_PREPAINT) {
             rev->result = CDRF_DODEFAULT;
             return;
