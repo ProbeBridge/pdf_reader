@@ -42,6 +42,7 @@
 #include "AnnotTextPopup.h"
 #include "ImageSaveCropResize.h"
 #include "ReadAloud.h"
+#include "ReflowDocument.h"
 #include "GoogleLens.h"
 #include "gui/DocCanvas.h"
 #include "gui/Sidebar.h"
@@ -683,6 +684,10 @@ static void SetMenuChecks(MenuModel* menu, MainWindow* win) {
         }
         if (it.cmdId >= CmdViewLayoutFirst && it.cmdId <= CmdViewLayoutLast) {
             it.checked = it.cmdId == layoutCmd;
+            continue;
+        }
+        if (it.cmdId == CmdToggleDocumentReflow) {
+            it.checked = ReflowDocumentVisible(win);
             continue;
         }
         if (it.cmdId == CmdToggleContinuousView) {

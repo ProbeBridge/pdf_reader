@@ -2,7 +2,7 @@
 
 2026-11-12 整理，依据 `main` 分支 `e23d1ad` 的源码。除特别说明外，路径都相对于 `sumatrapdf/`。标「待验证」的内容需要在 Mac 上实际构建后确认。
 
-## 当前实现（2026-11-12）
+## 当前实现（2026-11-13）
 
 实现位于 `main` 工作区，不要求长期维护 macOS 专属分支。原 Windows 构建入口保留；Mac 使用 `npm run build:mac`、`npm run install:mac`。
 
@@ -11,12 +11,13 @@
 - POSIX HTTP 支持请求方法、流式数据、取消和禁止重定向。
 - Mac 使用独立 bundle id、数据目录和钥匙串密钥；加密文件采用 AES-256-CBC + HMAC-SHA256，原子替换、0600 权限和跨进程文件锁。Windows 仍用 DPAPI。
 - 注释侧栏及宽度保存、选字/单击注释、原文高亮与音标悬停、重排及缓存、历史页、目录字号、离线朗读、应用资源和安装脚本已接入。
+- Mac 工具栏显示「重排：关/开」文字开关，查看菜单提供「正文重排」和当前勾选状态；`Command+Shift+R` 也可切换。重排与注释侧栏同步深浅主题。
 - 新建注释同时请求 LLM、合成原文语音，音频就绪后自动播放一次；恢复、重新生成、追问不自动重播。原版 PDF 与重排正文的悬停操作栏均有播放、删除按钮，可从单词移入操作栏；手动重播复用语音缓存；同一单词仍在合成或播放时重复触发会继续当前播放，完成后才重播。
 - `-for-testing` 下的注释只保存在内存中；原生测试使用本地模拟服务，不发送真实密钥。
 
 本机验证：ng 基础单元测试通过；真实 WKWebView 的注释读写、GET/POST 流式网络、错误状态、重定向拦截、PDF 选字生成、重排缓存和历史页通过。6000 项目录的字号调整、恢复及行高验证通过。Kokoro 已在 WKWebView 里完成离线音频合成。独立加密测试验证了跨进程解密、随机 IV 和逐字节篡改拒绝。
 
-语音定向验证：
+语音与重排定向验证：
 
 ```sh
 # 仓库根目录
@@ -24,6 +25,7 @@ node tests/notes-autoplay.mjs
 node tests/reflow-play.mjs
 # sumatrapdf/ 目录
 ../node_modules/.bin/bun tests/ad-hoc-mac-notes-speech.ts
+../node_modules/.bin/bun tests/ad-hoc-mac-reflow.ts
 ```
 
 原生语音回归使用真实 WKWebView Web Audio，静音输出并等待完整音频结束，检查 LLM 回复挂起时只自动播放一次，以及正文和重排操作栏的手动重播。

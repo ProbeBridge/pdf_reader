@@ -230,6 +230,7 @@ MenuDef menuDefFile[] = {
 MenuDef menuDefView[] = {
     {StrL("AI 注释侧栏"), CmdContextNotes},
     {StrL("AI 注释设置..."), CmdContextSettings},
+    {StrL("正文重排"), CmdToggleDocumentReflow},
     {
         TrN("Command Palette"),
         CmdCommandPalette,

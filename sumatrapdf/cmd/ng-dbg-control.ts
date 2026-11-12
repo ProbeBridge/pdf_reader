@@ -21,6 +21,7 @@ export const controlCommands: Record<string, number> = {
   Quit: 2,
   TestSelectionTranslate: 15,
   TestFavoriteNav: 34,
+  TestToolbarButtons: 35,
   TestKeyboardLinkFollow: 36,
   TestSelectTextKeyboard: 40,
   TestAIChat: 41,

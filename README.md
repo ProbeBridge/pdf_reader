@@ -70,6 +70,8 @@ npm run install:mac -- --launch
 
 macOS 使用 WKWebView 承载现有网页层，支持选字和单击注释、原文高亮、重排、阅读历史及目录字号。目录顶部的 `−` / 百分比 / `+` 调整字号，也支持目录内按住 Control 或 Command 滚轮缩放。Windows 默认快捷键中的 Control 在 Mac 主窗口通常对应 Command；注释和重排网页内两者均可使用。朗读优先使用本地 Kokoro，失败时使用系统语音。
 
+打开 PDF 后，点击顶部「重排：关/开」或「查看（View）→ 正文重排」切换重排，也可按 `Command+Shift+R`。重排支持文字缩放、返回原版，以及与注释侧栏同步的深浅主题。
+
 设置与加密注释保存在 `~/Library/Application Support/SumatraPDF-AI`，与官方 ng 隔离。注释文件使用 AES-256-CBC 加 HMAC-SHA256，随机密钥保存在当前用户的 macOS 钥匙串。Windows 继续使用 DPAPI。跨系统迁移通过界面导出、导入 JSON，不复制加密文件；导出文件不含 API Key。
 
 Mac 构建包位于 `sumatrapdf/out/mac/rel/.bundle.noindex/SumatraPDF AI.app`，开发副本不参与应用搜索；安装版固定保留在 `/Applications/SumatraPDF AI.app`。使用本地 ad-hoc 签名，未做公开分发所需的 Developer ID 签名与公证。
