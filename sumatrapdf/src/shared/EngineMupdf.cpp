@@ -8457,6 +8457,42 @@ bool EngineMupdf::TryExtractPageText(int pageNo, PageText* out) {
 
 static constexpr size_t kMaxReflowPageBytes = 32 * 1024 * 1024;
 static constexpr int kReflowReplacementRune = 0xFFFD;
+static constexpr int kReflowWingdingsBullet = 0xF06C;
+static constexpr int kReflowBulletRune = 0x2022;
+
+static int ReflowSymbolRune(fz_stext_char* c) {
+    // This private-use codepoint is a round dot only in Wingdings.
+    if (c->c != kReflowWingdingsBullet || !c->font) return c->c;
+    const char* name = c->font->name;
+    if (const char* subset = strchr(name, '+')) name = subset + 1;
+    if (str::EqI(Str(name), StrL("Wingdings")) || str::EqI(Str(name), StrL("Wingdings-Regular")))
+        return kReflowBulletRune;
+    return c->c;
+}
+
+static void CollectReflowBullets(fz_stext_block* block, Vec<QuadF>& bullets) {
+    for (; block; block = block->next) {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down) {
+            CollectReflowBullets(block->u.s.down->first_block, bullets);
+        } else if (block->type == FZ_STEXT_BLOCK_TEXT) {
+            for (auto* line = block->u.t.first_line; line; line = line->next)
+                for (auto* c = line->first_char; c; c = c->next)
+                    if (ReflowSymbolRune(c) != c->c) VecAppend(bullets, QuadFromFz(c->quad));
+        }
+    }
+}
+
+static bool IsReflowBullet(const QuadF& quad, const Vec<QuadF>& bullets) {
+    for (const auto& b : bullets) {
+        constexpr float epsilon = .001f;
+        if (fabsf(b.ul.x - quad.ul.x) < epsilon && fabsf(b.ul.y - quad.ul.y) < epsilon &&
+            fabsf(b.ur.x - quad.ur.x) < epsilon && fabsf(b.ur.y - quad.ur.y) < epsilon &&
+            fabsf(b.ll.x - quad.ll.x) < epsilon && fabsf(b.ll.y - quad.ll.y) < epsilon &&
+            fabsf(b.lr.x - quad.lr.x) < epsilon && fabsf(b.lr.y - quad.lr.y) < epsilon)
+            return true;
+    }
+    return false;
+}
 
 static bool ReflowBlankQuad(const QuadF& quad) {
     constexpr float epsilon = 0.001f;
@@ -8468,6 +8504,7 @@ static bool ReflowBlankQuad(const QuadF& quad) {
 
 static Str ReflowDisplayText(EngineMupdf* engine, int pageNo, Str source) {
     PageText ink;
+    Vec<QuadF> bullets;
     {
         ScopedRecursiveMutex pagesScope(&engine->pagesLock);
         ScopedMutex renderScope(&engine->renderLock);
@@ -8475,13 +8512,30 @@ static Str ReflowDisplayText(EngineMupdf* engine, int pageNo, Str source) {
         if (!page) return {};
         // Keep exact upright quads here: rounded integer boxes can hide or
         // invent tiny ink heights. Other extraction/cache consumers stay unchanged.
-        ink = ExtractPageTextLocked(engine, page, FZ_STEXT_ACCURATE_BBOXES, true);
+        auto* ctx = engine->Ctx();
+        fz_stext_page* text = nullptr;
+        fz_var(text);
+        fz_var(ink);
+        fz_var(bullets);
+        fz_try(ctx) {
+            auto opts = NewTextPageOptions(FZ_STEXT_ACCURATE_BBOXES);
+            text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
+            CollectReflowBullets(text->first_block, bullets);
+            ink.text = FzTextPageToUtf8(text, &ink.coords, &ink.quads, true);
+            ink.nCodepoints = Utf8CodepointCount(ink.text);
+        }
+        fz_always(ctx) {
+            fz_drop_stext_page(ctx, text);
+        }
+        fz_catch(ctx) {
+            fz_report_error(ctx);
+        }
     }
     defer {
         FreePageText(&ink);
     };
     // Accurate boxes can change paragraph joins. Never use their indices unless
-    // the original source text is identical, including every replacement rune.
+    // the original source text is identical, including every source codepoint.
     if (!ink.quads || ink.nCodepoints != Utf8CodepointCount(source) || !str::Eq(ink.text, source)) return {};
     str::Builder display;
     int byte = 0;
@@ -8492,6 +8546,9 @@ static Str ReflowDisplayText(EngineMupdf* engine, int pageNo, Str source) {
         if (rune == kReflowReplacementRune && ReflowBlankQuad(ink.quads[i])) {
             display.AppendChar(' ');
             changed = true;
+        } else if (rune == kReflowWingdingsBullet && IsReflowBullet(ink.quads[i], bullets)) {
+            display.Append(StrL("\xe2\x80\xa2"));
+            changed = true;
         } else {
             display.Append(Str(source.s + start, byte - start));
         }
@@ -8499,14 +8556,15 @@ static Str ReflowDisplayText(EngineMupdf* engine, int pageNo, Str source) {
     return changed ? display.TakeStr() : Str{};
 }
 
-static void FixReflowBlankGlyphs(fz_stext_block* block) {
+static void FixReflowDisplayGlyphs(fz_stext_block* block) {
     for (; block; block = block->next) {
         if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down) {
-            FixReflowBlankGlyphs(block->u.s.down->first_block);
+            FixReflowDisplayGlyphs(block->u.s.down->first_block);
         } else if (block->type == FZ_STEXT_BLOCK_TEXT) {
             for (fz_stext_line* line = block->u.t.first_line; line; line = line->next) {
                 for (fz_stext_char* c = line->first_char; c; c = c->next) {
                     if (c->c == kReflowReplacementRune && ReflowBlankQuad(QuadFromFz(c->quad))) c->c = ' ';
+                    c->c = ReflowSymbolRune(c);
                 }
             }
         }
@@ -9257,9 +9315,10 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         return result;
     }
     result.sourceText = str::Dup(source);
-    // Some PDFs map a real blank glyph to NUL, which MuPDF exposes as U+FFFD.
-    // Repair only zero-ink positive advances, preserving the source and indices.
-    if (str::Contains(result.sourceText, StrL("\xef\xbf\xbd")))
+    // Repair proven blank glyphs and font-specific bullets for plain HTML,
+    // preserving the original source and its codepoint indices.
+    if (str::Contains(result.sourceText, StrL("\xef\xbf\xbd")) ||
+        str::Contains(result.sourceText, StrL("\xef\x81\xac")))
         result.displayText = ReflowDisplayText(this, pageNo, result.sourceText);
 
     auto* ctx = Ctx();
@@ -9288,7 +9347,7 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
                                FZ_STEXT_SEGMENT | FZ_STEXT_PARAGRAPH_BREAK | FZ_STEXT_TABLE_HUNT);
         if (result.displayText) opts.flags |= FZ_STEXT_ACCURATE_BBOXES;
         text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
-        if (result.displayText) FixReflowBlankGlyphs(text->first_block);
+        if (result.displayText) FixReflowDisplayGlyphs(text->first_block);
         ReflowTableMargins(text->first_block, text->mediabox, marginRefs, tableMargins);
         if (len(tableMargins) > 0) {
             fz_rect clip = text->mediabox;
@@ -9304,7 +9363,7 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
                 opts.flags |= FZ_STEXT_CLIP_RECT;
                 opts.clip = clip;
                 text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
-                if (result.displayText) FixReflowBlankGlyphs(text->first_block);
+                if (result.displayText) FixReflowDisplayGlyphs(text->first_block);
             } else
                 VecReset(tableMargins);
         }

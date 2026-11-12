@@ -373,10 +373,23 @@ try {
   );
   await page.locator(".card").hover();
   await page.getByRole("button", { name: "删除", exact: true }).click();
-  await page.getByText("确认删除", { exact: true }).click();
-  await page.locator(".card").waitFor({ state: "hidden" });
+  await page.locator(".card").waitFor({ state: "hidden", timeout: 1500 });
   await page.getByText("撤销", { exact: true }).click();
   await page.locator(".card").waitFor();
+  assert.equal(
+    await page.locator(".turn").count(),
+    1,
+    "undo restores follow-ups too",
+  );
+  await page.getByRole("button", { name: "删除问答", exact: true }).click();
+  await page.locator(".turn").waitFor({ state: "hidden", timeout: 1500 });
+  await page.reload();
+  await page.locator(".card").waitFor();
+  assert.equal(
+    await page.locator(".turn").count(),
+    0,
+    "single-click follow-up deletion persists",
+  );
   fail = true;
   await page.locator(".card").hover();
   await page.getByRole("button", { name: /^重新生成/ }).click();
@@ -394,7 +407,7 @@ try {
     .waitFor();
   await page.locator("#cancel-settings").click();
   const saved = structuredClone(store);
-  assert.ok(saved["page:test-document"].annotations[0].thread.length === 1);
+  assert.ok(saved["page:test-document"].annotations[0].thread.length === 0);
   await page.locator(".card").hover();
   await page.locator(".detail-toggle").click();
   await page.evaluate(() => {
@@ -444,7 +457,7 @@ try {
   );
   assert.ok(
     store["page:test-document"].annotations.find((a) => a.quote === "context")
-      .thread.length === 1,
+      .thread.length === 0,
   );
 
   const other = {

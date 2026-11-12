@@ -147,8 +147,11 @@ try {
     let corrected = 0;
     for (let i = 0; i < source.length; i++)
       if (source[i] !== display[i]) {
-        assert.equal(source[i], "\uFFFD");
-        assert.equal(display[i], " ");
+        if (source[i] === "\uF06C") assert.equal(display[i], "\u2022");
+        else {
+          assert.equal(source[i], "\uFFFD");
+          assert.equal(display[i], " ");
+        }
         corrected++;
       }
     const result: any = {
@@ -159,6 +162,72 @@ try {
       codepoints: source.length,
     };
     report.pages.push(result);
+    if (number === 334 && args.includes("--bullets")) {
+      result.bullets = display.filter((char) => char === "\u2022").length;
+      assert.equal(source.filter((char) => char === "\uF06C").length, 2);
+      assert.equal(
+        result.bullets,
+        2,
+        "Wingdings list dots must render as standard round bullets",
+      );
+      assert.equal(display.filter((char) => char === "\uF06C").length, 0);
+      const visibleText = await flow
+        .locator('.source-page[data-page="334"] .page-content')
+        .textContent();
+      assert.equal((visibleText.match(/\u2022/g) || []).length, 2);
+      assert.ok(!visibleText.includes("\uF06C"));
+      result.bulletWords = await flow.evaluate(
+        async ({ sourceText, displayText }: any) => {
+          const content = document.querySelector(
+            '.source-page[data-page="334"] .page-content',
+          )!;
+          const { SourcePage } = await import(
+            new URL("reflow-model.js", location.href).href
+          );
+          const model = new SourcePage(content, 334, sourceText, displayText);
+          const found = [];
+          const walker = document.createTreeWalker(
+            content,
+            NodeFilter.SHOW_TEXT,
+          );
+          for (let node; (node = walker.nextNode());) {
+            for (const word of ["Separate", "Supports"]) {
+              const index = (node.textContent || "").indexOf(word);
+              if (index < 0) continue;
+              const range = document.createRange();
+              range.setStart(node, index);
+              range.setEnd(node, index + word.length);
+              const original = model
+                .selection(range)
+                .map((r: any) =>
+                  Array.from(sourceText).slice(r.start, r.end).join(""),
+                )
+                .join("");
+              found.push({ word, original });
+            }
+          }
+          return found;
+        },
+        { sourceText: page.sourceText, displayText: page.displayText },
+      );
+      assert.equal(result.bulletWords.length, 2);
+      for (const item of result.bulletWords)
+        assert.equal(
+          item.original,
+          item.word,
+          "list word anchors must retain original indices",
+        );
+      await flow.evaluate(() => {
+        const p = [
+          ...document.querySelectorAll('.source-page[data-page="334"] p'),
+        ].find((p) =>
+          p.textContent?.includes("Configurable start address via software"),
+        );
+        p?.scrollIntoView({ block: "center" });
+      });
+      await settle();
+      await flow.screenshot({ path: join(output, "bullets-334.png") });
+    }
     assert.ok(
       corrected > 0,
       "this actual broken-font page must have geometry-confirmed blank corrections",
@@ -639,7 +708,7 @@ try {
     await captureWindowToPng(app.frame, join(output, `manual-${number}.png`));
     writeFileSync(join(output, "report.json"), JSON.stringify(report, null, 2));
     console.log(
-      `[reflow-manual] page ${number}: ${result.sourceFFFD} raw FFFD → ${result.displayFFFD} display; ${corrected} confirmed blanks; glyph delta ${(after.top - before).toFixed(2)}px`,
+      `[reflow-manual] page ${number}: ${result.sourceFFFD} raw FFFD → ${result.displayFFFD} display; ${corrected} repaired glyphs; glyph delta ${(after.top - before).toFixed(2)}px`,
     );
   }
   console.log(

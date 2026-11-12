@@ -141,27 +141,6 @@ function sorted() {
       (a.anchor?.ranges?.[0]?.start || 0) - (b.anchor?.ranges?.[0]?.start || 0),
   );
 }
-function confirmButton(label, fn, icon) {
-  let armed = false,
-    timer;
-  const b = button(label, () => {
-    if (armed) {
-      clearTimeout(timer);
-      return fn();
-    }
-    armed = true;
-    b.textContent = text("确认删除", "Confirm delete");
-    b.setAttribute("aria-label", b.textContent);
-    timer = setTimeout(() => {
-      armed = false;
-      b.textContent = label;
-      b.setAttribute("aria-label", label);
-      if (icon) setIcon(b, icon, label);
-    }, 3000);
-  });
-  if (icon) setIcon(b, icon, label);
-  return b;
-}
 function setActive() {
   for (const card of $("#cards").children) card.classList.toggle("active", card.dataset.id === active);
 }
@@ -253,7 +232,11 @@ function makeCard(a, key, p) {
     ask,
     regen,
     copy,
-    confirmButton(text("删除", "Delete"), () => deleteNote(a, key, p), "del"),
+    setIcon(
+      button("", () => deleteNote(a, key, p)),
+      "del",
+      text("删除", "Delete"),
+    ),
   );
   const sourcePage = a.anchor?.ranges?.[0]?.page;
   if (sourcePage) tools.append(button(text(`第 ${sourcePage} 页`, `p. ${sourcePage}`), () => goTo(a, key), "page"));
@@ -285,7 +268,7 @@ function makeCard(a, key, p) {
     const actions = node("div", "tools");
     actions.append(
       button(text("重试", "Retry"), () => runJob(key, p, a, turn)),
-      confirmButton(text("删除问答", "Delete turn"), async () => {
+      button(text("删除问答", "Delete turn"), async () => {
         jobs.get(jobKey(key, a.id, turn.id))?.abort();
         a._deletedTurns = { ...a._deletedTurns, [turn.id]: stamp(revision(turn), a._deletedTurns?.[turn.id]) };
         a.thread = a.thread.filter((t) => t.id !== turn.id);
