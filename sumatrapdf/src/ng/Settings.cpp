@@ -870,6 +870,7 @@ const FieldInfo gFileStateFields[] = {
     {offsetof(FileState, eBookUI), SettingType::StructPtr, (intptr_t)&gFileEBookUIInfo},
     {offsetof(FileState, tocState), SettingType::IntArray, 0},
     {offsetof(FileState, filePath), SettingType::String, 0},
+    {offsetof(FileState, lastOpened), SettingType::String, 0},
     {offsetof(FileState, decryptionKey), SettingType::String, 0},
     {offsetof(FileState, sidebarView), SettingType::String, 0, false, false, gEnumFileStateSidebarView, "bookmarks"},
     {offsetof(FileState, displayMode), SettingType::String, (intptr_t)"automatic", false, false,
@@ -908,40 +909,40 @@ StructInfo gFileStateInfo = {
     sizeof(FileState),
     (u16)dimof(gFileStateFields),
     gFileStateFields,
-    "Favorites\0EBookUI\0TocState\0FilePath\0DecryptionKey\0SidebarView\0DisplayMode\0Zoom\0BgCol\0TabCol\0LayerStates"
-    "\0MeasurementUnit\0MeasurementScale\0OpenCount\0PageNo\0PageCount\0Rotation\0Brightness\0Contrast\0WindowState\0Si"
-    "debarDx\0ScrollPos\0WindowPos\0IsPinned\0IsMissing\0UseDefaultState\0ShowToc\0DisplayR2L\0UniformPageWidth\0TrimEm"
-    "ptyMargins\0UserCrop\0FreePan\0FacingStepOne\0Mirror\0ReadingAutoScrollSpeed\0ReadColumns",
+    "Favorites\0EBookUI\0TocState\0FilePath\0LastOpened\0DecryptionKey\0SidebarView\0DisplayMode\0Zoom\0BgCol\0TabCol\0"
+    "LayerStates\0MeasurementUnit\0MeasurementScale\0OpenCount\0PageNo\0PageCount\0Rotation\0Brightness\0Contrast\0Wind"
+    "owState\0SidebarDx\0ScrollPos\0WindowPos\0IsPinned\0IsMissing\0UseDefaultState\0ShowToc\0DisplayR2L\0UniformPageWi"
+    "dth\0TrimEmptyMargins\0UserCrop\0FreePan\0FacingStepOne\0Mirror\0ReadingAutoScrollSpeed\0ReadColumns",
     "pages of this document bookmarked in the Favorites menu\0reflowable (ebook) settings for just this document. The "
     "block is absent until you add it; a field left empty or 0 uses the global EBookUI value. The global section's "
     "WindowBgCol and DefaultDisplayMode are already per-document as BgCol and DisplayMode below\0data required to "
-    "determine which parts of the table of contents have been expanded\0path of the document\0data required to open a "
-    "password protected document without having to ask for the password again\0what the sidebar's top panel shows: "
-    "bookmarks (the default) or thumbnails\0layout of pages\0zoom (in %) or one of those values: fit page, fit width, "
-    "fit height, fit content\0if given, overrides the background color for this document\0if given, overrides the tab "
-    "color for this document\0visibility of the PDF's layers (optional content groups), if changed: 1 (shown) or 0 "
-    "(hidden) for each layer, in document order\0unit name for calibrated measurements\0calibrated measurement units "
-    "per document coordinate; 0 uses points\0number of times this document has been opened recently\0number of the "
-    "last read page, or `bm:<bookmark>` for documents with chapters (folds in ReparseIdx; see "
-    "PagePosition.cpp)\0number of pages in the document when it was last open; 0 if unknown. Used to show reading "
-    "progress on the home page\0how far pages have been rotated as a multiple of 90 degrees\0brightness of rendered "
-    "pages, -100 to 100; 0 leaves them unchanged. Set with CmdAdjustBrightness\0contrast of rendered pages, -100 to "
-    "100; 0 leaves them unchanged. Set with CmdAdjustContrast\0state of the window. 1 is normal, 2 is maximized, 3 is "
-    "fullscreen, 4 is minimized\0width of the bookmarks / favorites sidebar in screen pixels, as last resized\0how far "
-    "this document has been scrolled (in x and y direction)\0default position (can be on any monitor)\0if true, the "
-    "document is \"pinned\" to the Frequently Read list, so that recently opened documents don't displace it\0if true, "
-    "the file is considered missing and won't be shown in any list\0if true, this document opens with the global "
-    "defaults instead of the values below\0if true, show the table of contents (Bookmarks) sidebar when the document "
-    "has one\0if true, the document is displayed right-to-left in facing and book view modes\0if true, percentage zoom "
-    "scales every page to the width page 1 has at that zoom level\0if true, empty margins around page content are "
-    "trimmed from display\0part of every page that is shown, set with CmdTrimPagesToSelection; all zeros shows whole "
-    "pages\0if true, the view can be panned past the page edges, so any part of a page can be brought to the center of "
-    "the window\0if true, facing and book view move one page at a time: pages 1-2, then 2-3, then 3-4\0if true, pages "
-    "are shown (and printed) mirrored left to right\0Automatically Scroll speed for this document, in pixels per "
-    "second; 0 uses the global ReadingAutoScrollSpeed\0if true, scrolling reads a two-column page down its left "
-    "column, then its right one (View / Read Columns)",
+    "determine which parts of the table of contents have been expanded\0path of the document\0last opened time as Unix "
+    "milliseconds\0data required to open a password protected document without having to ask for the password "
+    "again\0what the sidebar's top panel shows: bookmarks (the default) or thumbnails\0layout of pages\0zoom (in %) or "
+    "one of those values: fit page, fit width, fit height, fit content\0if given, overrides the background color for "
+    "this document\0if given, overrides the tab color for this document\0visibility of the PDF's layers (optional "
+    "content groups), if changed: 1 (shown) or 0 (hidden) for each layer, in document order\0unit name for calibrated "
+    "measurements\0calibrated measurement units per document coordinate; 0 uses points\0number of times this document "
+    "has been opened recently\0number of the last read page, or `bm:<bookmark>` for documents with chapters (folds in "
+    "ReparseIdx; see PagePosition.cpp)\0number of pages in the document when it was last open; 0 if unknown. Used to "
+    "show reading progress on the home page\0how far pages have been rotated as a multiple of 90 degrees\0brightness "
+    "of rendered pages, -100 to 100; 0 leaves them unchanged. Set with CmdAdjustBrightness\0contrast of rendered "
+    "pages, -100 to 100; 0 leaves them unchanged. Set with CmdAdjustContrast\0state of the window. 1 is normal, 2 is "
+    "maximized, 3 is fullscreen, 4 is minimized\0width of the bookmarks / favorites sidebar in screen pixels, as last "
+    "resized\0how far this document has been scrolled (in x and y direction)\0default position (can be on any "
+    "monitor)\0if true, the document is \"pinned\" to the Frequently Read list, so that recently opened documents "
+    "don't displace it\0if true, the file is considered missing and won't be shown in any list\0if true, this document "
+    "opens with the global defaults instead of the values below\0if true, show the table of contents (Bookmarks) "
+    "sidebar when the document has one\0if true, the document is displayed right-to-left in facing and book view "
+    "modes\0if true, percentage zoom scales every page to the width page 1 has at that zoom level\0if true, empty "
+    "margins around page content are trimmed from display\0part of every page that is shown, set with "
+    "CmdTrimPagesToSelection; all zeros shows whole pages\0if true, the view can be panned past the page edges, so any "
+    "part of a page can be brought to the center of the window\0if true, facing and book view move one page at a time: "
+    "pages 1-2, then 2-3, then 3-4\0if true, pages are shown (and printed) mirrored left to right\0Automatically "
+    "Scroll speed for this document, in pixels per second; 0 uses the global ReadingAutoScrollSpeed\0if true, "
+    "scrolling reads a two-column page down its left column, then its right one (View / Read Columns)",
     false};
-static_assert(dimof(gFileStateFields) == 36);
+static_assert(dimof(gFileStateFields) == 37);
 
 static const FieldInfo gPointF_2_Fields[] = {
     {offsetof(PointF, x), SettingType::Float, (intptr_t)"0"},
@@ -1225,6 +1226,7 @@ static const FieldInfo gSettingsFields[] = {
     {offsetof(Settings, aiChat), SettingType::Struct, (intptr_t)&gAIChatInfo},
     {(size_t)-1, SettingType::Comment, 0},
     {offsetof(Settings, aiChatSidebarDx), SettingType::Int, 0, true},
+    {offsetof(Settings, contextNotesWidth), SettingType::Int, 0, true},
     {(size_t)-1, SettingType::Comment, 0},
     {offsetof(Settings, translateToLang), SettingType::String, (intptr_t)"", true},
     {offsetof(Settings, translateFromLang), SettingType::String, (intptr_t)"", true},
@@ -1298,11 +1300,11 @@ const StructInfo gSettingsInfo = {
     "\0DisableAntiAlias\0EngineeringDrawingEnhance\0DisableAutoLinks\0UseSysColors\0UseTabs\0ShowCaption\0SelectionTool"
     "bar\0SelectionToolbarLayout\0TabsMru\0CtrlTabSimple\0ZoomLevels\0ZoomIncrement\0FitWidthPercent\0\0FixedPageUI\0\0"
     "EBookUI\0\0ComicBookUI\0\0ImageUI\0\0ChmUI\0\0MarkdownUI\0\0HtmlUI\0\0ClaudeCode\0\0GrokBuild\0\0CodexBuild\0\0Ant"
-    "iGravity\0\0CustomAI\0\0AIChat\0\0AIChatSidebarDx\0\0TranslateToLang\0TranslateFromLang\0TranslateEngine\0\0Annota"
-    "tions\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers\0\0TextSnippets\0"
-    "\0Shortcuts\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0VersionToSkip\0WindowStat"
-    "e\0WindowPos\0SearchUIWindowPos\0AnnotationsWindowShowNote\0HelpWindowPos\0FileStates\0SessionData\0ReopenOnce\0Ti"
-    "meOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdates\0OnlineApiKey\0OnlineServer\0\0",
+    "iGravity\0\0CustomAI\0\0AIChat\0\0AIChatSidebarDx\0ContextNotesWidth\0\0TranslateToLang\0TranslateFromLang\0Transl"
+    "ateEngine\0\0Annotations\0\0ExternalViewers\0\0ForwardSearch\0\0PrinterDefaults\0\0Fullscreen\0\0SelectionHandlers"
+    "\0\0TextSnippets\0\0Shortcuts\0\0Themes\0\0TabGroups\0\0CustomScreenDPI\0\0\0DefaultPasswords\0UiLanguage\0Version"
+    "ToSkip\0WindowState\0WindowPos\0SearchUIWindowPos\0AnnotationsWindowShowNote\0HelpWindowPos\0FileStates\0SessionDa"
+    "ta\0ReopenOnce\0TimeOfLastUpdateCheck\0OpenCountWeek\0PropWinPos\0CheckForUpdates\0OnlineApiKey\0OnlineServer\0\0",
     "\0\0default layout of pages. page aspect (3.7+): first open of a PDF, XPS, DjVu, PostScript or DVI file uses page "
     "1 — taller than wide is continuous + fit width, wider than tall is single page + fit page; a remembered FileState "
     "still wins\0default zoom. valid values: fit page, fit width, fit height, fit content or percent like 100%\0if "
@@ -1463,7 +1465,8 @@ const StructInfo gSettingsInfo = {
     "chat sidebar\0\0settings for the OpenAI Codex chat sidebar\0\0settings for the Antigravity chat "
     "sidebar\0\0settings for an OpenAI-compatible Chat Completions provider\0\0appearance of the AI chat sidebar, "
     "shared by all backends\0\0width of the AI chat sidebar (0 = use default); shared by Claude Code, Grok Build, and "
-    "OpenAI Codex (internal)\0\0remembered destination language for selection translation; empty uses OS UI "
+    "OpenAI Codex (internal)\0width of the AI annotation sidebar in 96-DPI pixels (0 = automatic); saved when its "
+    "divider is dragged\0\0remembered destination language for selection translation; empty uses OS UI "
     "language\0remembered source language for selection translation; empty means Auto\0remembered engine for Translate "
     "Selection: Google, DeepL, Grok Build, Claude Code, OpenAI Codex or Antigravity\0\0default values for annotations "
     "in PDF documents\0\0list of additional external viewers for various file types. See [docs for more "
@@ -1488,7 +1491,7 @@ const StructInfo gSettingsInfo = {
     "File / Link SumatraPDF Web. Do not share the settings file.\0an empty value means the public SumatraPDF Web site. "
     "The dialog does not edit it.\0\0Settings below are not recognized by the current version",
     false};
-static_assert(dimof(gSettingsFields) == 193);
+static_assert(dimof(gSettingsFields) == 194);
 static const FieldInfo gTheme_1_Fields[] = {
     {offsetof(Theme, name), SettingType::String, (intptr_t)""},
     {offsetof(Theme, textColor), SettingType::Color, (intptr_t)""},

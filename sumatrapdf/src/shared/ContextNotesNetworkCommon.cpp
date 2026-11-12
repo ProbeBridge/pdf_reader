@@ -1,17 +1,24 @@
 /* Copyright 2026 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
+#if defined(SUMATRA_NG)
+#include "gui/GpuiBridge.h"
+#else
 #include "base/Base.h"
+#endif
 #include "base/Win.h"
 #include "base/Http.h"
 #include "base/JsonParser.h"
 #include "base/UITask.h"
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
+#if !defined(SUMATRA_NG)
 #include "gui/win/WinGui.h"
+#endif
 #include "Settings.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
+#include "ContextNotesPlatform.h"
 #include "ContextNotesNetwork.h"
 
 constexpr int kNotesNetworkUrlLimit = 16 * 1024;
@@ -26,7 +33,7 @@ struct NotesNetworkEvent {
 };
 
 static void DeliverNetworkEvent(NotesNetworkEvent* ev) {
-    if (IsMainWindowValid(ev->win) && ev->win->hwndFrame == ev->frame) {
+    if (IsMainWindowValid(ev->win) && NotesFrame(ev->win) == ev->frame) {
         EmitContextNotesNetwork(ev->win, ev->payload);
     }
     str::Free(ev->payload);
@@ -118,6 +125,7 @@ static bool ValidNetworkUrl(Str url) {
         u8 c = (u8)url.s[i];
         if (c <= ' ' || c == 0x7f || c == '#') return false;
     }
+#if OS_WIN
     URL_COMPONENTS parts{};
     parts.dwStructSize = sizeof(parts);
     parts.dwSchemeLength = parts.dwHostNameLength = parts.dwUserNameLength = parts.dwPasswordLength = (DWORD)-1;
@@ -126,6 +134,15 @@ static bool ValidNetworkUrl(Str url) {
     bool password = parts.dwPasswordLength != 0 && parts.dwPasswordLength != (DWORD)-1;
     return (parts.nScheme == INTERNET_SCHEME_HTTP || parts.nScheme == INTERNET_SCHEME_HTTPS) && !user && !password &&
            parts.lpszHostName && parts.dwHostNameLength > 0 && parts.dwHostNameLength <= 253;
+#else
+    Str authority = url;
+    if (!str::TrimPrefix(authority, StrL("https://")) && !str::TrimPrefix(authority, StrL("http://"))) return false;
+    int end = 0;
+    while (end < len(authority) && authority.s[end] != '/' && authority.s[end] != '?') end++;
+    authority = Str(authority.s, end);
+    return len(authority) > 0 && len(authority) <= 259 && !str::Contains(authority, StrL("@")) &&
+           !str::Contains(authority, StrL("\\"));
+#endif
 }
 
 static bool HeaderNameAllowed(Str name) {
@@ -184,7 +201,7 @@ void StartContextNotesFetch(MainWindow* win, Str id, Str requestJson) {
     }
     auto* req = new NotesNetworkRequest();
     req->win = win;
-    req->frame = win->hwndFrame;
+    req->frame = NotesFrame(win);
     req->id = str::Dup(id);
     Str headerJson;
     bool valid = true;

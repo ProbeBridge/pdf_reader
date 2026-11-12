@@ -1,0 +1,42 @@
+namespace gpui {
+struct Ctx;
+struct El;
+struct PaintCtx;
+} // namespace gpui
+struct MainWindow;
+struct Gfx {
+    gpui::PaintCtx* ctx = nullptr;
+};
+HWND NotesFrame(MainWindow*);
+HWND NotesCanvas(MainWindow*);
+void NotesRelayout(MainWindow*);
+void NotesExecute(MainWindow*, int);
+void NotesPostCommand(MainWindow*, int);
+void NotesUpdate(MainWindow*);
+bool NotesCopy(MainWindow*, Str);
+void NotesPanelDestroy(MainWindow*);
+void NotesPaintRect(Gfx*, Rect);
+void NotesTooltip(MainWindow*, Str, Rect);
+void NotesHandCursor(MainWindow*);
+Point NotesCursorPoint(MainWindow*);
+void NotesStartTimer(MainWindow*);
+void NotesCancelTimer(MainWindow*);
+void NotesExport(MainWindow*, Str id, Str value);
+void ContextNotesExported(MainWindow*, Str id, bool ok);
+Str NotesEncrypt(Str);
+Str NotesDecrypt(Str);
+void ContextNotesTick(MainWindow*);
+void ContextNotesActionsTick(MainWindow*);
+void HideContextNoteActions(MainWindow*);
+gpui::El* ContextNotesActionsBuild(MainWindow*, gpui::Ctx*);
+TempStr ContextNotesActionsStateTemp(MainWindow*);
+void ContextNotesBlockViews(MainWindow*, bool blocked);
+void ReflowDocumentBlockView(MainWindow*, bool blocked);
+gpui::El* ContextNotesViewBuild(MainWindow*, gpui::Ctx*, bool history);
+gpui::El* ContextNotesPanelBuild(MainWindow*, gpui::Ctx*);
+int ContextNotesPanelDx(MainWindow*);
+bool ContextNotesReady(MainWindow*);
+gpui::El* ReflowDocumentBuild(MainWindow*, gpui::Ctx*);
+bool ReflowDocumentReady(MainWindow*);
+TempStr ContextNotesTestTemp(MainWindow*, Str surface, Str script);
+TempStr ReflowDocumentTestTemp(MainWindow*, Str script);

@@ -58,6 +58,4 @@ struct HttpStreamCancel {
 };
 
 bool HttpPostStream(Str url, Str headers, Str body, HttpStreamSink* sink, HttpStreamCancel* cancel);
-#if OS_WIN
 bool HttpRequestStream(Str method, Str url, Str headers, Str body, HttpStreamSink* sink, HttpStreamCancel* cancel);
-#endif

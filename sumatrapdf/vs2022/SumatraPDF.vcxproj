@@ -1413,8 +1413,8 @@
     <ClInclude Include="..\src\BrightnessContrastDialog.h" />
     <ClInclude Include="..\src\Canvas.h" />
     <ClInclude Include="..\src\ContextNoteOverlay.h" />
-    <ClInclude Include="..\src\ContextNotes.h" />
-    <ClInclude Include="..\src\ContextNotesNetwork.h" />
+    <ClInclude Include="..\src\shared\ContextNotes.h" />
+    <ClInclude Include="..\src\shared\ContextNotesNetwork.h" />
     <ClInclude Include="..\src\DarkMode.h" />
     <ClInclude Include="..\src\FindWindow.h" />
     <ClInclude Include="..\src\HexView.h" />
@@ -1429,7 +1429,7 @@
     <ClInclude Include="..\src\OverlayScrollbar.h" />
     <ClInclude Include="..\src\PageInfoBar.h" />
     <ClInclude Include="..\src\PageThumbnails.h" />
-    <ClInclude Include="..\src\ReflowDocument.h" />
+    <ClInclude Include="..\src\shared\ReflowDocument.h" />
     <ClInclude Include="..\src\RegistryPreview.h" />
     <ClInclude Include="..\src\RegistrySearchFilter.h" />
     <ClInclude Include="..\src\ScreenshotCapture.h" />
@@ -1676,8 +1676,8 @@
     <ClCompile Include="..\src\ChangeThemeDialog.cpp" />
     <ClCompile Include="..\src\CommandPalette.cpp" />
     <ClCompile Include="..\src\ContextNoteOverlay.cpp" />
-    <ClCompile Include="..\src\ContextNotes.cpp" />
-    <ClCompile Include="..\src\ContextNotesNetwork.cpp" />
+    <ClCompile Include="..\src\shared\ContextNotesCommon.cpp" />
+    <ClCompile Include="..\src\shared\ContextNotesNetworkCommon.cpp" />
     <ClCompile Include="..\src\CustomZoomDialog.cpp" />
     <ClCompile Include="..\src\DarkMode.cpp" />
     <ClCompile Include="..\src\DocumentProperties.cpp" />
@@ -1719,7 +1719,7 @@
     <ClCompile Include="..\src\RefHover.cpp" />
     <ClCompile Include="..\src\RefHoverCanvas.cpp" />
     <ClCompile Include="..\src\RefHoverPopup.cpp" />
-    <ClCompile Include="..\src\ReflowDocument.cpp" />
+    <ClCompile Include="..\src\shared\ReflowDocumentCommon.cpp" />
     <ClCompile Include="..\src\RegistryPreview.cpp" />
     <ClCompile Include="..\src\RegistrySearchFilter.cpp" />
     <ClCompile Include="..\src\Screenshot.cpp" />

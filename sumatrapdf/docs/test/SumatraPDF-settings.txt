@@ -208,6 +208,7 @@ AIChat [
 ]
 
 AIChatSidebarDx = 0
+ContextNotesWidth = 0
 
 
 Annotations [

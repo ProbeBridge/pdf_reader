@@ -27,10 +27,10 @@ if (-not $bunCommand) { throw 'Bun is required. Run npm ci or install Bun before
 $env:VSLANG = '1033'
 $env:CL = '/FI"' + (Join-Path $PSScriptRoot 'msvc-compat.h') + '"'
 $formatSources = @(
-    'src/ContextNotes.cpp', 'src/ContextNotes.h',
+    'src/shared/ContextNotesCommon.cpp', 'src/shared/ContextNotes.h',
     'src/ContextNoteOverlay.cpp', 'src/ContextNoteOverlay.h',
-    'src/ContextNotesNetwork.cpp', 'src/ContextNotesNetwork.h',
-    'src/ReflowDocument.cpp', 'src/ReflowDocument.h',
+    'src/shared/ContextNotesNetworkCommon.cpp', 'src/shared/ContextNotesNetwork.h',
+    'src/shared/ReflowDocumentCommon.cpp', 'src/shared/ReflowDocument.h',
     'src/Canvas.cpp', 'src/CanvasAboutUI.cpp', 'src/CustomZoomDialog.cpp',
     'src/MainWindow.cpp', 'src/MainWindow.h', 'src/Menu.cpp',
     'src/Settings.cpp', 'src/Settings.h', 'src/SidebarPanel.cpp',

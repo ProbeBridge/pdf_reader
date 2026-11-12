@@ -58,6 +58,7 @@ export const controlCommands: Record<string, number> = {
   TestOverlayState: 162,
   TestInput: 121,
   TestUiState: 122,
+  TestTocRows: 158,
   TestToolWindow: 125,
   TestContextMenuAt: 127,
   TestOpenFiles: 132,
@@ -162,7 +163,8 @@ async function readExactly(s: Socket, n: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   while (total < n) {
-    const chunk = s.read(n - total) as Buffer | null;
+    const available = Math.min(n - total, s.readableLength);
+    const chunk = available > 0 ? (s.read(available) as Buffer | null) : null;
     if (chunk) {
       chunks.push(chunk);
       total += chunk.length;

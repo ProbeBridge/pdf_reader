@@ -90,6 +90,9 @@
 #include "ExplorerQuickLook.h"
 #include "AIChatCommon.h"
 #include "AIChatPanel.h"
+#include "ContextNotes.h"
+#include "ReflowDocument.h"
+#include "NotesPlatform.h"
 #include "gui/DialogWidgets.h"
 #include "StressTesting.h"
 #include "SumatraConfig.h"
@@ -835,6 +838,9 @@ TempStr AppShellUiStateTemp(MainWindow* win) {
         Rect vp = dm->GetViewPort();
         out.Append(fmt(" view=%d,%d zoom=%.1f", vp.x, vp.y, (double)dm->GetZoomReal(dm->CurrentPageNo())));
     }
+    out.Append(ContextNotesActionsStateTemp(win));
+    out.Append(fmt(" notesVisible=%d notesReady=%d reflowVisible=%d reflowReady=%d", ContextNotesVisible(win),
+                   ContextNotesReady(win), ReflowDocumentVisible(win), ReflowDocumentReady(win)));
     out.Append(fmt(" annotHover=%d", IsAnnotationHoverOverlayVisible(win) ? 1 : 0));
     // the tooltip gpui shows or is about to show (it is a layer of its own,
     // which a window capture does not have)
@@ -1952,9 +1958,11 @@ static gp::El* BuildCanvas(ShellView* self, gp::Ctx* cx, bool overlayUp) {
     const gp::Theme& th = gp::ThemeNow(cx->app);
     BrowserView* browser = UpdateBrowserViews(win, overlayUp);
     if (win->AsFixed()) {
+        if (ReflowDocumentVisible(win) && !overlayUp) return ReflowDocumentBuild(win, cx);
         return DocCanvasBuild(win, cx);
     }
     if (win->IsCurrentTabAbout()) {
+        if (!overlayUp && ContextNotesHome(win)) return ContextNotesViewBuild(win, cx, true);
         return HomePageBuild(win, cx);
     }
     WindowTab* currTab = win->CurrentTab();
@@ -2087,6 +2095,7 @@ static gp::El* BuildPageInfoBar(MainWindow* win, gp::Ctx* cx);
 // three side by side with a SplitterCtrl between them
 static gp::El* BuildBody(ShellView* self, gp::Ctx* cx, bool overlayUp) {
     MainWindow* win = self->win;
+    ContextNotesBlockViews(win, overlayUp);
     gp::El* canvas =
         BuildCanvas(self, cx, overlayUp)->TrackFocus(win->shell->frameFocus)->FocusOnPress()->TabStop(false);
     // orig makes the notifications children of hwndCanvas, so they sit over the
@@ -2106,11 +2115,12 @@ static gp::El* BuildBody(ShellView* self, gp::Ctx* cx, bool overlayUp) {
     if (!floats) {
         win->sidebarOverlayShown = false;
     }
+    gp::El* notes = ContextNotesPanelBuild(win, cx);
     gp::El* aiChat = overlayUp ? nullptr : AIChatPanelBuild(win, cx);
     // orig docks the folder picker's window beside the frame; here it is the
     // frame's last column
     gp::El* navFiles = NavFilesUIBuild(win, cx);
-    if (!sidebar && !aiChat && !navFiles) {
+    if (!sidebar && !aiChat && !navFiles && !notes) {
         return canvas;
     }
     const gp::Theme& th = gp::ThemeNow(cx->app);
@@ -2144,6 +2154,7 @@ static gp::El* BuildBody(ShellView* self, gp::Ctx* cx, bool overlayUp) {
         row->Child(splitter);
         row->Child(sidebarBox);
     }
+    if (notes) row->Child(notes);
     if (aiChat) {
         row->Child(aiChat);
     }
@@ -2598,6 +2609,7 @@ void ShellView::OnKeyDown(ShellView* self, gp::Ctx* cx, const gp::KeyEvent* ev) 
     if (!IsMainWindowValidAndNotClosing(win)) {
         return;
     }
+    if (ev->vk == VK_ESCAPE) HideContextNoteActions(win);
     // gpui runs this listener before it looks the key up in the keymap, and
     // clearing propagate is what stops the command from also firing
     auto* mut = const_cast<gp::KeyEvent*>(ev);
@@ -3233,6 +3245,7 @@ void ShellView::OnTick(ShellView* self, gp::Ctx* cx, const gp::TickEvent* ev) {
 
     BrowserViewCreatePending(win, cx);
     AIChatTick(win, ms);
+    ContextNotesTick(win);
     ChangeThemePreviewTick(ms);
     PdfToolDialogTick(win, ms);
     // what moved inside the frame (a sidebar, a toolbar row) moves the canvas
@@ -3384,7 +3397,8 @@ static Rect CanvasRcForFrame(MainWindow* win, int frameDx, int frameDy, bool men
     int bodyDx = frameDx - 2 * border;
     bool sidebarOnRight = gSettings && gSettings->sidebarOnRight;
     int canvasX = border + (sidebarOnRight ? 0 : sidebarDx);
-    return Rect{canvasX, border + chromeDy, bodyDx - sidebarDx - aiChatDx - navFilesDx, bodyDy};
+    return Rect{canvasX, border + chromeDy, bodyDx - sidebarDx - aiChatDx - navFilesDx - ContextNotesPanelDx(win),
+                bodyDy};
 }
 
 // Chrome that changes the canvas (the Edit PDF row, the sidebar) has to

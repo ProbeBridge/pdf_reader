@@ -41,6 +41,7 @@ struct BrowserViewCallback {
     // window.__sumatra__.notify(method, ...args) in the page; paramsJson is
     // the JSON array of the arguments
     virtual void OnJsNotify(Str /*method*/, Str /*paramsJson*/) {}
+    virtual void OnJsCall(Str id, Str method, Str paramsJson) {}
 
     virtual ~BrowserViewCallback() = default;
 };

@@ -1,23 +1,43 @@
 /* Copyright 2026 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
+#if defined(SUMATRA_NG)
+#include "gui/GpuiBridge.h"
+#else
 #include "base/Base.h"
+#endif
 #include "base/File.h"
 #include "base/Win.h"
 #include "base/JsonParser.h"
 #include "base/Crypto.h"
 #include "base/UITask.h"
+#if OS_WIN
 #include <wincrypt.h>
 #include <commdlg.h>
+#else
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#endif
 #include <time.h>
 #include "gui/Dpi.h"
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
+#if !defined(SUMATRA_NG)
 #include "gui/win/WinGui.h"
+#endif
+#if defined(SUMATRA_NG)
+#include "NotesWebView.h"
+#else
 #include "gui/win/WebView.h"
+#endif
+#if !defined(SUMATRA_NG)
 #include "gui/Gfx.h"
+#endif
 #include "Settings.h"
 #include "AppSettings.h"
+#include "SumatraConfig.h"
 #include "AppTools.h"
 #include "DocController.h"
 #include "EngineBase.h"
@@ -31,11 +51,28 @@
 #include "FileHistory.h"
 #include "Commands.h"
 #include "HomePage.h"
+#if !defined(SUMATRA_NG)
 #include "Canvas.h"
+#endif
+#if !defined(SUMATRA_NG)
 #include "ContextNoteOverlay.h"
+#else
+void HideContextNoteActions(MainWindow*);
+void DestroyContextNoteActions(MainWindow*);
+void ShowContextNoteActions(MainWindow*, Str, Point);
+bool ContextNoteActionsNear(MainWindow*, Point);
+TempStr ContextNoteActionIdTemp(MainWindow*);
+void ContextNoteDelete(MainWindow*, Str);
+#endif
 #include "ContextNotesNetwork.h"
 #include "ReflowDocument.h"
 #include "ContextNotes.h"
+#define CONTEXT_NOTES_IMPL
+#include "ContextNotesPlatform.h"
+#if defined(SUMATRA_NG)
+#include "gui/AppShell.h"
+#include "gui/DocCanvas.h"
+#endif
 
 constexpr UINT_PTR kContextClickTimer = 172;
 constexpr UINT kContextClickDelay = 520;
@@ -51,6 +88,7 @@ enum class NotesStoreLoad {
     Refresh
 };
 
+#if OS_WIN
 struct NotesStoreGuard {
     HANDLE mutex = nullptr;
     bool locked = false;
@@ -82,6 +120,27 @@ struct NotesStoreGuard {
     }
 };
 
+#else
+struct NotesStoreGuard {
+    int fd = -1;
+    bool locked = false;
+    NotesStoreGuard() {
+        fd = open(CStrTemp(GetPathInAppDataDirTemp(StrL("context-notes.lock"))), O_CREAT | O_RDWR, 0600);
+        locked = fd >= 0 && flock(fd, LOCK_EX) == 0;
+    }
+    void Unlock() {
+        if (locked) {
+            flock(fd, LOCK_UN);
+            locked = false;
+        }
+    }
+    ~NotesStoreGuard() {
+        Unlock();
+        if (fd >= 0) close(fd);
+    }
+};
+#endif
+
 struct NoteRange {
     Str id;
     Str ipa;
@@ -90,7 +149,11 @@ struct NoteRange {
     int end = 0;
 };
 
-struct NotesView : WebviewWnd {
+#if !defined(SUMATRA_NG)
+using NotesWebBase = WebviewWnd;
+#endif
+
+struct NotesView : NotesWebBase {
     MainWindow* win = nullptr;
     bool history = false;
     bool ready = false;
@@ -111,6 +174,7 @@ struct ContextNotes {
     NotesView* panel = nullptr;
     NotesView* history = nullptr;
     bool visible = false;
+    bool blocked = false;
     bool clickEnabled = true;
     bool wantSettings = false;
     Str documentPath;
@@ -132,6 +196,9 @@ struct ContextNotes {
     Rect clickViewport;
     int clickRotation = 0;
     DWORD lastPositions = 0;
+#if defined(SUMATRA_NG)
+    double clickDue = 0;
+#endif
 };
 
 static TempStr JsonQuote(Str s) {
@@ -154,7 +221,7 @@ static TempStr StorePath() {
 }
 
 static void LoadNotesStore(NotesStoreLoad mode = NotesStoreLoad::Cached) {
-    if (gStoreLoaded && (mode == NotesStoreLoad::Cached || gDontSaveSettings)) {
+    if (gStoreLoaded && (mode == NotesStoreLoad::Cached || gDontSaveSettings || gForTesting)) {
         return;
     }
     gStoreLoaded = true;
@@ -171,15 +238,24 @@ static void LoadNotesStore(NotesStoreLoad mode = NotesStoreLoad::Cached) {
     }
     Str bytes = file::ReadFile(path);
     AutoFree<char> freeBytes(bytes.s);
+#if OS_WIN
     DATA_BLOB input{(DWORD)len(bytes), (BYTE*)bytes.s};
     DATA_BLOB output{};
     if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
         gStoreFailed = true;
         return;
     }
+    Str plain((char*)output.pbData, (int)output.cbData);
+#else
+    Str plain = NotesDecrypt(bytes);
+    if (len(plain) == 0) {
+        gStoreFailed = true;
+        return;
+    }
+#endif
     StrVec keys;
     StrVec values;
-    json::Reader r(Str((char*)output.pbData, (int)output.cbData));
+    json::Reader r(plain);
     for (json::Value& v : r) {
         if (!v.path || v.path->next || v.type != json::Type::String) {
             continue;
@@ -192,7 +268,11 @@ static void LoadNotesStore(NotesStoreLoad mode = NotesStoreLoad::Cached) {
         gStoreKeys = keys;
         gStoreValues = values;
     }
+#if OS_WIN
     LocalFree(output.pbData);
+#else
+    str::Free(plain);
+#endif
 }
 
 static bool SaveNotesStore() {
@@ -209,20 +289,30 @@ static bool SaveNotesStore() {
     }
     b.AppendChar('}');
     Str data = ToStr(b);
-    if (gDontSaveSettings) {
+    if (gDontSaveSettings || gForTesting) {
         return true;
     }
+#if OS_WIN
     DATA_BLOB input{(DWORD)len(data), (BYTE*)data.s};
     DATA_BLOB output{};
     if (!CryptProtectData(&input, L"SumatraPDF AI notes", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
                           &output)) {
         return false;
     }
+    Str encrypted((char*)output.pbData, (int)output.cbData);
+#else
+    Str encrypted = NotesEncrypt(data);
+    if (len(encrypted) == 0) return false;
+#endif
     TempStr path = StorePath();
-    TempStr tmp = fmt("%s.%d.tmp", path, (int)GetCurrentProcessId());
-    bool ok =
-        output.cbData <= kNotesStoreMaxBytes && file::WriteFile(tmp, Str((char*)output.pbData, (int)output.cbData));
+    TempStr tmp = fmt("%s.%d.tmp", path, (int)CurrentProcessId());
+    bool ok = len(encrypted) <= kNotesStoreMaxBytes && file::WriteFile(tmp, encrypted);
+#if OS_WIN
     LocalFree(output.pbData);
+#else
+    str::Free(encrypted);
+    if (ok) ok = chmod(CStrTemp(tmp), 0600) == 0;
+#endif
     if (ok) {
         file::FileHandle handle = file::OpenReadWrite(tmp, false);
         ok = handle != file::kInvalidFileHandle && file::Flush(handle);
@@ -231,8 +321,7 @@ static bool SaveNotesStore() {
         }
     }
     if (ok) {
-        ok =
-            MoveFileExW(ToWStrTemp(tmp).s, ToWStrTemp(path).s, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+        ok = file::RenameReplace(path, tmp);
     }
     return ok;
 }
@@ -272,15 +361,7 @@ static void BroadcastStore(Str key, Str value) {
 }
 
 static TempStr NotesAssetPath() {
-    WCHAR exe[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exe, dimof(exe));
-    Str dir = path::GetDirTemp(ToUtf8Temp(WStr(exe)));
-    Str assets = path::JoinTemp(dir, StrL("notes"));
-    if (path::IsDirectory(assets)) {
-        return str::DupTemp(assets);
-    }
-    dir = path::GetDirTemp(path::GetDirTemp(dir));
-    return path::JoinTemp(dir, StrL("src\\notes"));
+    return NotesAssetsTemp();
 }
 
 static bool NotesResource(void*, Str resource, WebViewResourceResult* res) {
@@ -443,7 +524,7 @@ static TempStr ReadingHistoryJson() {
                 b.AppendChar(',');
             }
             first = false;
-            i64 opened = len(fs->lastOpened) > 0 ? _atoi64(CStrTemp(fs->lastOpened)) : 0;
+            i64 opened = len(fs->lastOpened) > 0 ? atoll(CStrTemp(fs->lastOpened)) : 0;
             b.Append(fmt("{\"path\":%s,\"name\":%s,\"opened\":%lld}", JsonQuote(fs->filePath),
                          JsonQuote(path::GetBaseNameTemp(fs->filePath)), opened));
         }
@@ -479,11 +560,12 @@ static void GoToNote(MainWindow* win, Str id) {
     }
 }
 
+#if !defined(SUMATRA_NG)
 static bool SaveNotesExport(MainWindow* win, Str value) {
     WCHAR file[MAX_PATH] = L"SumatraPDF-notes.json";
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = win->hwndFrame;
+    ofn.hwndOwner = NotesFrame(win);
     ofn.lpstrFilter = L"JSON files\0*.json\0\0";
     ofn.lpstrFile = file;
     ofn.nMaxFile = dimof(file);
@@ -493,6 +575,7 @@ static bool SaveNotesExport(MainWindow* win, Str value) {
     AutoFree<char> freeCopy(copy.s);
     return GetSaveFileNameW(&ofn) && file::WriteFile(ToUtf8Temp(WStr(file)), copy);
 }
+#endif
 
 static void NotesCall(void* ctx, Str id, Str method, Str params) {
     auto* view = (NotesView*)ctx;
@@ -587,6 +670,15 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
     } else if (str::Eq(action, StrL("highlights"))) {
         if (str::Eq(JsonField(data, StrL("key")), n->documentKey)) {
             SetNoteRanges(n, JsonField(data, StrL("items")));
+            Str actionId = ContextNoteActionIdTemp(win);
+            bool actionExists = false;
+            for (const NoteRange& range : n->ranges)
+                if (str::Eq(range.id, actionId)) {
+                    actionExists = true;
+                    break;
+                }
+            if (actionId && !actionExists) HideContextNoteActions(win);
+
             ReflowDocumentUpdateNotes(win);
             ScheduleRepaint(win, 0);
         }
@@ -595,19 +687,24 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
             GoToNote(win, JsonField(data, StrL("id")));
         }
     } else if (str::Eq(action, StrL("copy"))) {
-        result = CopyTextToClipboard(JsonField(data, StrL("value"))) ? StrL("true") : StrL("false");
+        result = NotesCopy(win, JsonField(data, StrL("value"))) ? StrL("true") : StrL("false");
     } else if (str::Eq(action, StrL("export"))) {
+#if defined(SUMATRA_NG)
+        NotesExport(win, id, JsonField(data, StrL("value")));
+        return;
+#else
         result = SaveNotesExport(win, JsonField(data, StrL("value"))) ? StrL("true") : StrL("false");
+#endif
     } else if (str::Eq(action, StrL("closeNotes"))) {
         n->visible = false;
-        win->uiState.layout = {};
-        ScheduleUiUpdate(win, kUiForceRelayout);
+        NotesRelayout(win);
+        NotesUpdate(win);
     } else if (str::Eq(action, StrL("showNotes"))) {
         if (!n->visible) {
             ToggleContextNotes(win);
         }
     } else if (str::Eq(action, StrL("openPicker"))) {
-        HwndPostCommand(win->hwndFrame, CmdOpenFile);
+        NotesPostCommand(win, CmdOpenFile);
     } else if (str::Eq(action, StrL("open"))) {
         Str path = JsonField(data, StrL("path"));
         if (FileHistoryFindByPath(path)) {
@@ -617,7 +714,9 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
         FileState* fs = FileHistoryFindByPath(JsonField(data, StrL("path")));
         if (fs) {
             fs->isMissing = str::Eq(action, StrL("hideHistory"));
+#if !defined(SUMATRA_NG)
             HomePageInvalidateLayoutCache();
+#endif
             ScheduleSaveSettings();
             for (MainWindow* window : gWindows) {
                 if (window->contextNotes) {
@@ -675,7 +774,9 @@ static ContextNotes* EnsureNotes(MainWindow* win) {
 
 static NotesView* CreateNotesView(MainWindow* win, bool history) {
     if (!HasWebView()) {
-        MessageBoxW(win->hwndFrame, L"AI notes require Microsoft Edge WebView2 Runtime.", L"SumatraPDF AI", MB_OK);
+#if !defined(SUMATRA_NG)
+        MessageBoxW(NotesFrame(win), L"AI notes require Microsoft Edge WebView2 Runtime.", L"SumatraPDF AI", MB_OK);
+#endif
         return nullptr;
     }
     auto* view = new NotesView();
@@ -692,8 +793,10 @@ static NotesView* CreateNotesView(MainWindow* win, bool history) {
     view->allowExternalDrop = false;
     view->defaultBackgroundColor = MkRgb(255, 255, 255);
     CreateWebViewArgs args;
-    args.parent = history ? win->hwndCanvas : win->hwndFrame;
+    args.parent = history ? NotesCanvas(win) : NotesFrame(win);
+#if !defined(SUMATRA_NG)
     args.pos = HwndClientRect(args.parent);
+#endif
     if (!view->Create(args)) {
         delete view;
         return nullptr;
@@ -723,13 +826,13 @@ void ContextNotesSync(MainWindow* win) {
         if (idx >= 0 && str::Contains(gStoreValues[idx], StrL("\"annotations\":[{")) && !n->panel) {
             n->panel = CreateNotesView(win, false);
             n->visible = n->panel != nullptr;
-            win->uiState.layout = {};
+            NotesRelayout(win);
         }
         DispatchNotes(n->panel, StrL("documentchange"), NotesDocument(win));
         DispatchNotes(n->history, StrL("historychange"), StrL("null"));
     }
     if (n->history) {
-        n->history->SetIsVisible(win->IsCurrentTabAbout() && !win->InPresentation());
+        n->history->SetIsVisible(win->IsCurrentTabAbout() && !win->InPresentation() && !n->blocked);
     }
 }
 
@@ -744,10 +847,14 @@ bool ContextNotesHome(MainWindow* win) {
     if (!n->history) {
         return false;
     }
+#if !defined(SUMATRA_NG)
     HomePageHideSearch(win);
+#endif
     n->history->SetIsVisible(true);
-    Rect rc = HwndClientRect(win->hwndCanvas);
+#if !defined(SUMATRA_NG)
+    Rect rc = HwndClientRect(NotesCanvas(win));
     HwndMoveWindow(n->history->hwnd, &rc);
+#endif
     return true;
 }
 
@@ -757,11 +864,13 @@ void ContextNotesLayout(MainWindow* win) {
         return;
     }
     if (n->history && n->history->IsVisible()) {
-        Rect rc = HwndClientRect(win->hwndCanvas);
+#if !defined(SUMATRA_NG)
+        Rect rc = HwndClientRect(NotesCanvas(win));
         HwndMoveWindow(n->history->hwnd, &rc);
+#endif
     }
     if (n->panel) {
-        n->panel->SetIsVisible(ContextNotesVisible(win));
+        n->panel->SetIsVisible(ContextNotesVisible(win) && !n->blocked);
     }
 }
 
@@ -784,8 +893,8 @@ void ToggleContextNotes(MainWindow* win) {
     }
     ContextNotesSync(win);
     n->visible = !n->visible;
-    win->uiState.layout = {};
-    ScheduleUiUpdate(win, kUiForceRelayout);
+    NotesRelayout(win);
+    NotesUpdate(win);
 }
 
 void ShowContextSettings(MainWindow* win) {
@@ -801,7 +910,7 @@ void ShowContextSettings(MainWindow* win) {
 }
 
 void ShowReadingHistory(MainWindow* win) {
-    HwndSendCommand(win->hwndFrame, CmdNewTab);
+    NotesExecute(win, CmdNewTab);
     ContextNotesHome(win);
 }
 
@@ -955,7 +1064,7 @@ struct NotesTextTask {
 };
 
 static void FinishNotesText(NotesTextTask* task) {
-    if (IsMainWindowValid(task->win) && task->win->hwndFrame == task->frame) {
+    if (IsMainWindowValid(task->win) && NotesFrame(task->win) == task->frame) {
         auto* n = task->win->contextNotes;
         auto* dm = task->win->AsFixed();
         if (n && dm && n->documentEpoch == task->epoch && dm->GetEngine() == task->engine) {
@@ -977,6 +1086,7 @@ static void FinishNotesText(NotesTextTask* task) {
             entry->ink = task->ink;
             task->ink = {};
             VecAppend(n->inkPages, entry);
+            ContextNotesHover(task->win, NotesCursorPoint(task->win));
             ScheduleRepaint(task->win, 0);
         }
     }
@@ -1003,7 +1113,7 @@ static bool NotesTextCached(MainWindow* win, DisplayModel* dm, int page) {
     VecAppend(n->pendingText, page);
     auto* task = new NotesTextTask();
     task->win = win;
-    task->frame = win->hwndFrame;
+    task->frame = NotesFrame(win);
     task->engine = engine;
     task->epoch = n->documentEpoch;
     task->page = page;
@@ -1056,8 +1166,7 @@ void PaintContextNotes(MainWindow* win, Gfx* gfx) {
                 rect.y += inset;
                 rect.dy -= inset * 2;
             }
-            gfx->FillRects(&rect, 1, MkRgb(255, 219, 112), 75);
-            gfx->DrawLine(Rect(rect.x, rect.y + rect.dy, rect.dx, 1), MkRgb(153, 84, 0), DpiScale(1));
+            NotesPaintRect(gfx, rect);
             top = std::min(top, rect.y);
         }
         if (top != INT_MAX) {
@@ -1069,9 +1178,9 @@ void PaintContextNotes(MainWindow* win, Gfx* gfx) {
         }
     }
     positions.AppendChar(']');
-    if (ContextNotesVisible(win) && GetTickCount() - n->lastPositions >= 80 &&
+    if (ContextNotesVisible(win) && GetTickCount64() - n->lastPositions >= 80 &&
         !str::Eq(ToStr(positions), n->positions)) {
-        n->lastPositions = GetTickCount();
+        n->lastPositions = GetTickCount64();
         str::ReplaceWithCopy(&n->positions, ToStr(positions));
         DispatchNotes(n->panel, StrL("notepositions"), n->positions);
     }
@@ -1079,9 +1188,20 @@ void PaintContextNotes(MainWindow* win, Gfx* gfx) {
 
 void ContextNotesCancelClick(MainWindow* win) {
     HideContextNoteActions(win);
-    KillTimer(win->hwndCanvas, kContextClickTimer);
+    NotesCancelTimer(win);
     if (win->contextNotes) {
         win->contextNotes->clickTab = nullptr;
+    }
+}
+
+void ContextNoteSpeak(MainWindow* win, Str id) {
+    auto* n = win->contextNotes;
+    if (!n) return;
+    for (NoteRange& range : n->ranges) {
+        if (!str::Eq(range.id, id)) continue;
+        DispatchNotes(n->panel, StrL("speaknote"),
+                      fmt("{\"key\":%s,\"id\":%s}", JsonQuote(n->documentKey), JsonQuote(id)));
+        return;
     }
 }
 
@@ -1101,14 +1221,20 @@ void ContextNoteDelete(MainWindow* win, Str id) {
 }
 
 bool ContextNotesHover(MainWindow* win, Point point) {
+    auto noHit = [&]() {
+        if (ContextNoteActionsNear(win, point)) return true;
+        HideContextNoteActions(win);
+        return false;
+    };
     auto* n = win->contextNotes;
     auto* dm = win->AsFixed();
-    if (!n || !dm || len(n->ranges) == 0) {
-        return false;
+    if (!n || !dm || len(n->ranges) == 0 || win->mouseAction != MouseAction::None || win->InPresentation()) {
+        HideContextNoteActions(win);
+        return noHit();
     }
     int page = dm->GetPageNoByPoint(point);
     if (!dm->ValidPageNo(page)) {
-        return false;
+        return noHit();
     }
     bool hasRange = false;
     for (NoteRange& range : n->ranges) {
@@ -1117,11 +1243,11 @@ bool ContextNotesHover(MainWindow* win, Point point) {
             break;
         }
     }
-    if (!hasRange || !NotesTextCached(win, dm, page)) return false;
+    if (!hasRange || !NotesTextCached(win, dm, page)) return noHit();
     int count = 0;
     Rect* coords = nullptr;
     if (!dm->GetEngine()->TryGetTextForPage(page, &count, &coords) || !coords) {
-        return false;
+        return noHit();
     }
     PointF pagePoint = dm->CvtFromScreen(point, page);
     for (NoteRange& range : n->ranges) {
@@ -1134,29 +1260,22 @@ bool ContextNotesHover(MainWindow* win, Point point) {
             }
             if (len(range.ipa) > 0) {
                 Rect rect = dm->CvtToScreen(page, ToRectF(coords[glyph]));
-                win->ShowToolTip(range.ipa, rect);
+                NotesTooltip(win, range.ipa, rect);
             } else {
-                win->DeleteToolTip();
+                NotesTooltip(win, {}, {});
             }
-            SetCursorCached(IDC_HAND);
+            Rect anchor = dm->CvtToScreen(page, ToRectF(coords[glyph]));
+            ShowContextNoteActions(win, range.id, Point(anchor.x + anchor.dx / 2, anchor.y));
+            NotesHandCursor(win);
             return true;
         }
     }
-    return false;
+    return noHit();
 }
 
-static void CALLBACK NotesClickTimer(HWND canvas, UINT, UINT_PTR, DWORD) {
-    KillTimer(canvas, kContextClickTimer);
-    MainWindow* win = nullptr;
-    for (MainWindow* window : gWindows) {
-        if (window->hwndCanvas == canvas) {
-            win = window;
-            break;
-        }
-    }
-    if (!win || !win->contextNotes || win->CurrentTab() != win->contextNotes->clickTab) {
-        return;
-    }
+void ContextNotesRunClick(MainWindow* win) {
+    NotesCancelTimer(win);
+    if (!win || !win->contextNotes || win->CurrentTab() != win->contextNotes->clickTab) return;
     auto* n = win->contextNotes;
     auto* dm = win->AsFixed();
     if (!dm || win->mouseAction != MouseAction::None || !HasPermission(Perm::CopySelection) ||
@@ -1225,8 +1344,7 @@ void ContextNotesClick(MainWindow* win, int x, int y) {
     n->clickPagePoint = dm->CvtFromScreen(n->clickPoint, n->clickPage);
     n->clickViewport = dm->GetViewPort();
     n->clickRotation = dm->GetRotation();
-    SetTimer(win->hwndCanvas, kContextClickTimer, std::max(kContextClickDelay, GetDoubleClickTime() + 30),
-             NotesClickTimer);
+    NotesStartTimer(win);
 }
 
 void ContextNotesDestroy(MainWindow* win) {
@@ -1250,4 +1368,115 @@ void ContextNotesDestroy(MainWindow* win) {
     str::Free(n->positions);
     delete n;
     win->contextNotes = nullptr;
+#if defined(SUMATRA_NG)
+    NotesPanelDestroy(win);
+#endif
 }
+
+#if defined(SUMATRA_NG)
+void ContextNotesTick(MainWindow* win) {
+    auto* n = win->contextNotes;
+    if (n && n->clickDue > 0 && gp::TimeNow() >= n->clickDue) ContextNotesRunClick(win);
+    ContextNotesSync(win);
+    ReflowDocumentLayout(win);
+    ContextNotesLayout(win);
+    ContextNotesActionsTick(win);
+}
+void NotesCancelTimer(MainWindow* win) {
+    if (win->contextNotes) win->contextNotes->clickDue = 0;
+}
+void NotesStartTimer(MainWindow* win) {
+    win->contextNotes->clickDue = gp::TimeNow() + 0.55;
+    AppShellRequestFastTick(win);
+}
+gp::El* ContextNotesViewBuild(MainWindow* win, gp::Ctx* cx, bool history) {
+    auto* n = EnsureNotes(win);
+    if (history && !n->history) ContextNotesHome(win);
+    auto* view = history ? n->history : n->panel;
+    return view ? BrowserViewBuild(view->browser, cx) : nullptr;
+}
+bool ContextNotesReady(MainWindow* win) {
+    auto* n = win->contextNotes;
+    return n && n->panel && n->panel->ready;
+}
+#endif
+
+TempStr NotesAssetsTemp() {
+    Str dir = path::GetDirTemp(GetSelfExePathTemp());
+    for (int i = 0; i < 6; i++) {
+        Str candidates[] = {path::JoinTemp(dir, StrL("notes")), path::JoinTemp(dir, StrL("Resources/notes")),
+                            path::JoinTemp(dir, StrL("src/notes"))};
+        for (Str candidate : candidates)
+            if (path::IsDirectory(candidate)) return str::DupTemp(candidate);
+        dir = path::GetDirTemp(dir);
+    }
+    return {};
+}
+#if !defined(SUMATRA_NG)
+static void CALLBACK NotesClickTimer(HWND canvas, UINT, UINT_PTR, DWORD) {
+    for (MainWindow* win : gWindows) {
+        if (win->hwndCanvas == canvas) {
+            ContextNotesRunClick(win);
+            return;
+        }
+    }
+}
+void NotesStartTimer(MainWindow* win) {
+    SetTimer(win->hwndCanvas, kContextClickTimer, std::max(kContextClickDelay, GetDoubleClickTime() + 30),
+             NotesClickTimer);
+}
+void NotesCancelTimer(MainWindow* win) {
+    KillTimer(win->hwndCanvas, kContextClickTimer);
+}
+#endif
+
+#if defined(SUMATRA_NG)
+TempStr ContextNotesTestTemp(MainWindow* win, Str surface, Str script) {
+    if (str::Eq(surface, StrL("reflow"))) return ReflowDocumentTestTemp(win, script);
+    if (str::Eq(surface, StrL("anchor"))) {
+        auto* n = win->contextNotes;
+        auto* dm = win->AsFixed();
+        if (!n || !dm) return StrL("not-ready");
+        for (const NoteRange& range : n->ranges) {
+            int count = 0;
+            Rect* coords = nullptr;
+            dm->GetEngine()->GetTextForPage(range.page, &count, &coords);
+            for (int glyph = std::max(0, range.start); glyph < std::min(count, range.end); glyph++) {
+                if (coords[glyph].IsEmpty()) continue;
+                Rect rect = dm->CvtToScreen(range.page, ToRectF(coords[glyph]));
+                float scale = CanvasScale(win);
+                return fmt("{\"x\":%d,\"y\":%d}", win->canvasRc.x + (int)((rect.x + rect.dx / 2.f) * scale),
+                           win->canvasRc.y + (int)((rect.y + rect.dy / 2.f) * scale));
+            }
+        }
+        return StrL("not-ready");
+    }
+
+    auto* n = win->contextNotes;
+    auto* view = n ? (str::Eq(surface, StrL("history")) ? n->history : n->panel) : nullptr;
+    if (!view) return StrL("no-view");
+    if (!view->ready) return StrL("not-ready");
+    if (script) view->TestEval(script);
+    return str::DupTemp(view->testResult);
+}
+#endif
+
+#if defined(SUMATRA_NG)
+void ContextNotesExported(MainWindow* win, Str id, bool ok) {
+    auto* n = win->contextNotes;
+    if (n && n->panel) n->panel->Resolve(id, 0, ok ? StrL("true") : StrL("false"));
+}
+#endif
+
+#if defined(SUMATRA_NG)
+void ContextNotesBlockViews(MainWindow* win, bool blocked) {
+    if (blocked) HideContextNoteActions(win);
+    auto* n = win->contextNotes;
+    if (n) {
+        n->blocked = blocked;
+        if (n->panel) n->panel->SetIsVisible(ContextNotesVisible(win) && !blocked);
+        if (n->history) n->history->SetIsVisible(win->IsCurrentTabAbout() && !blocked && !win->InPresentation());
+    }
+    ReflowDocumentBlockView(win, blocked);
+}
+#endif

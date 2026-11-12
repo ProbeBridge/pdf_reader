@@ -14,6 +14,8 @@ let info,
   checking = false,
   navigating = false,
   selectedNote,
+  actionAnchor,
+  actionHideTimer,
   clickTimer;
 const pages = new Map(),
   pending = new Map(),
@@ -55,6 +57,9 @@ if (!zh) {
   $("#annotate").textContent = "AI note on selected text";
   $("#original").textContent = "Original view";
   $("#focus-note").textContent = "View note";
+  $("#speak-note").title = "Read source text";
+  $("#speak-note").setAttribute("aria-label", "Read source text");
+  $("#note-actions").setAttribute("aria-label", "Note actions");
   $("#delete-note").textContent = "Delete";
 }
 function label() {
@@ -354,6 +359,7 @@ async function checkScroll() {
 }
 function setZoom(value, notify = true) {
   clearTimeout(clickTimer);
+  hideActions();
   const saved = anchor();
   zoom = Math.max(50, Math.min(400, Math.round(value)));
   document.documentElement.style.setProperty("--font-scale", String(zoom / 100));
@@ -457,23 +463,46 @@ function positions() {
   }
 }
 function noteAtPoint(x, y) {
-  return allNoteRanges().find(({ range }) =>
-    [...range.getClientRects()].some((rect) => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom),
-  )?.note;
+  for (const { note, range } of allNoteRanges())
+    for (const rect of range.getClientRects())
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return { note, rect };
 }
 function hideActions() {
+  clearTimeout(actionHideTimer);
+  actionHideTimer = null;
   $("#note-actions").hidden = true;
   selectedNote = null;
+  actionAnchor = null;
 }
-function showActions(note, x, y) {
+function showActions(hit, x, y, focus = false) {
+  clearTimeout(actionHideTimer);
+  actionHideTimer = null;
+  const { note, rect } = hit,
+    box = $("#note-actions"),
+    changed = selectedNote?.id !== note.id || box.hidden;
   selectedNote = note;
   $("#note-ipa").textContent = note.ipa || "";
-  const box = $("#note-actions");
-  box.hidden = false;
-  box.style.left = `${Math.max(8, Math.min(x, innerWidth - box.offsetWidth - 8))}px`;
-  box.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - box.offsetHeight - 8))}px`;
-  call("focus", { id: note.id }).catch(error);
+  if (changed) {
+    actionAnchor = rect;
+    box.hidden = false;
+    box.style.left = `${Math.max(8, Math.min(x, innerWidth - box.offsetWidth - 8))}px`;
+    box.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - box.offsetHeight - 8))}px`;
+  }
+  if (focus) call("focus", { id: note.id }).catch(error);
 }
+function nearActions(x, y) {
+  const box = $("#note-actions");
+  if (box.hidden || !actionAnchor) return false;
+  const bounds = box.getBoundingClientRect(),
+    gap = 6;
+  return (
+    x >= Math.min(bounds.left, actionAnchor.left) - gap &&
+    x <= Math.max(bounds.right, actionAnchor.right) + gap &&
+    y >= Math.min(bounds.top, actionAnchor.top) - gap &&
+    y <= Math.max(bounds.bottom, actionAnchor.bottom) + gap
+  );
+}
+$("#speak-note").addEventListener("click", () => selectedNote && call("speak", { id: selectedNote.id }).catch(error));
 $("#focus-note").addEventListener("click", () => selectedNote && call("focus", { id: selectedNote.id }).catch(error));
 $("#delete-note").addEventListener("click", () => {
   if (selectedNote) call("delete", { id: selectedNote.id }).catch(error);
@@ -484,16 +513,32 @@ document.addEventListener("pointerdown", (e) => {
   if (!e.target.closest("#note-actions")) hideActions();
 });
 document.addEventListener("dblclick", () => clearTimeout(clickTimer));
-$("#pages").addEventListener("pointermove", (e) => {
-  const note = noteAtPoint(e.clientX, e.clientY);
-  $("#pages").title = note?.ipa || "";
-  $("#pages").style.cursor = note ? "pointer" : "";
+document.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch") return;
+  if (e.buttons || !getSelection()?.isCollapsed) {
+    hideActions();
+    return;
+  }
+  const hit = e.target.closest("#pages") ? noteAtPoint(e.clientX, e.clientY) : null;
+  $("#pages").title = hit?.note.ipa || "";
+  $("#pages").style.cursor = hit ? "pointer" : "";
+  if (hit) {
+    showActions(hit, e.clientX, e.clientY);
+    return;
+  }
+  if (e.target.closest("#note-actions") || nearActions(e.clientX, e.clientY)) {
+    clearTimeout(actionHideTimer);
+    actionHideTimer = null;
+    return;
+  }
+  if (selectedNote && !actionHideTimer) actionHideTimer = setTimeout(hideActions, 120);
 });
+document.addEventListener("pointerleave", hideActions);
 $("#pages").addEventListener("click", (e) => {
-  if (e.ctrlKey || e.altKey || e.shiftKey || e.detail > 1 || !getSelection()?.isCollapsed) return;
-  const note = noteAtPoint(e.clientX, e.clientY);
-  if (note) {
-    showActions(note, e.clientX, e.clientY);
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.detail > 1 || !getSelection()?.isCollapsed) return;
+  const hit = noteAtPoint(e.clientX, e.clientY);
+  if (hit) {
+    showActions(hit, e.clientX, e.clientY, true);
     return;
   }
   if (!clickEnabled) return;
@@ -530,7 +575,7 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     $("#annotate").click();
   }
-  if (e.ctrlKey && ["+", "=", "-", "0"].includes(e.key)) {
+  if ((e.ctrlKey || e.metaKey) && ["+", "=", "-", "0"].includes(e.key)) {
     e.preventDefault();
     setZoom(e.key === "0" ? 100 : zoom * (e.key === "-" ? 1 / 1.1 : 1.1));
   }
@@ -539,7 +584,7 @@ addEventListener(
   "wheel",
   (e) => {
     clearTimeout(clickTimer);
-    if (e.ctrlKey) {
+    if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       setZoom(zoom * (e.deltaY > 0 ? 1 / 1.1 : 1.1));
     }
@@ -560,7 +605,10 @@ addEventListener(
   { passive: true },
 );
 addEventListener("touchmove", () => clearTimeout(clickTimer), { passive: true });
-addEventListener("blur", () => clearTimeout(clickTimer));
+addEventListener("blur", () => {
+  clearTimeout(clickTimer);
+  hideActions();
+});
 addEventListener("resize", () => {
   hideActions();
   drawNotes();
@@ -568,6 +616,7 @@ addEventListener("resize", () => {
 addEventListener("reflowstate", (e) => {
   const state = e.detail;
   notes = state.highlights || [];
+  if (selectedNote && !notes.some((note) => note.id === selectedNote.id)) hideActions();
   clickEnabled = state.click !== false;
   drawNotes();
 });

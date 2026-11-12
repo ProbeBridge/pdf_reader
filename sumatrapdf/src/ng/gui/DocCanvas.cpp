@@ -65,6 +65,8 @@
 #include "gui/DocCanvas.h"
 #include "CanvasCommon.h"
 #include "MainWindowCommon.h"
+#include "ContextNotes.h"
+#include "NotesPlatform.h"
 
 #include "SumatraLog.h"
 
@@ -2043,6 +2045,7 @@ static int CursorForResizeHandle(ResizeHandle handle);
 // orig's OnSetCursorMouseNone: the cursor and the link tooltip while no mouse
 // button is down. The laser-pointer branch is step 14.
 static void OnSetCursorMouseNone(MainWindow* win, Point pt) {
+    if (ContextNotesHover(win, pt)) return;
     DisplayModel* dm = win->AsFixed();
     if (!dm) {
         DeleteLinkTooltip(win);
@@ -2658,6 +2661,7 @@ static bool IsTripleClick() {
 }
 
 static void OnMouseLeftButtonDown(MainWindow* win, int x, int y) {
+    ContextNotesCancelClick(win);
     // orig closes a pinned hover menu when the page is pressed
     HideToolbarHoverDropdown(win);
     win->pressOnlyDeselected = false;
@@ -2923,6 +2927,7 @@ static void OnMouseLeftButtonDown(MainWindow* win, int x, int y) {
 // orig's OnMouseLeftButtonDblClk. False when the press was not a double-click
 // action, so the caller can still treat it as an ordinary click.
 static bool OnMouseLeftButtonDblClk(MainWindow* win, int x, int y) {
+    ContextNotesCancelClick(win);
     DisplayModel* dm = win->AsFixed();
     if (!dm) {
         return false;
@@ -3202,6 +3207,7 @@ static void OnMouseLeftButtonUp(MainWindow* win, gp::Ctx* cx, int x, int y) {
     if (didDragMouse) {
         return;
     }
+    if (!link && !CanvasCtrlPressed() && !CanvasShiftPressed() && !win->InPresentation()) ContextNotesClick(win, x, y);
 
     if (win->InBlankPresentation()) {
         /* return from white/black screens in presentation mode */
@@ -3686,6 +3692,8 @@ void DocCanvasView::OnPaint(gp::PaintCtx* ctx, gp::El* e, void* user) {
     if (win->showSelection) {
         PaintSelection(win, ctx);
     }
+    Gfx notesGfx{ctx};
+    PaintContextNotes(win, &notesGfx);
     PaintAnnotationPlacement(win, ctx, win->AsFixed());
     PaintHoveredAnnotationMark(win, ctx, win->AsFixed());
     PaintCurrentEditAnnotationMark(win->CurrentTab(), ctx, win->AsFixed());
@@ -4247,6 +4255,7 @@ gp::El* DocCanvasBuild(MainWindow* win, gp::Ctx* cx) {
     if (gp::El* annotHover = AnnotationHoverOverlayBuild(win, cx)) {
         root->Child(annotHover);
     }
+    if (gp::El* noteActions = ContextNotesActionsBuild(win, cx)) root->Child(noteActions);
     if (gp::El* refPopup = RefHoverBuild(win, cx)) {
         root->Child(refPopup);
     }

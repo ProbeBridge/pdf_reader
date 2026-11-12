@@ -284,6 +284,8 @@ struct FileState {
     HIMAGELIST himl;
     // path of the document
     Str filePath;
+    // last opened time as Unix milliseconds
+    Str lastOpened;
     // hex encoded MD5 fingerprint of the file content (32 chars) followed
     // by the crypt key (64 chars); only applies to PDF documents
     Str decryptionKey;
@@ -1166,6 +1168,9 @@ struct Settings {
     // width of the AI chat sidebar (0 = use default); shared by Claude
     // Code, Grok Build, and OpenAI Codex (internal)
     int aiChatSidebarDx;
+    // width of the AI annotation sidebar in 96-DPI pixels (0 = automatic);
+    // saved when its divider is dragged
+    int contextNotesWidth;
     // actual resolution of the main screen in DPI, used to show documents
     // at their physical size; if 0 or negative, the resolution reported by
     // Windows is used
@@ -1464,7 +1469,7 @@ struct FieldInfo;
 struct StructInfo;
 extern const StructInfo gFavoriteInfo;
 extern const StructInfo gFileEBookUIInfo;
-extern const FieldInfo gFileStateFields[36];
+extern const FieldInfo gFileStateFields[37];
 extern StructInfo gFileStateInfo;
 extern const StructInfo gTabStateInfo;
 extern const StructInfo gSessionDataInfo;

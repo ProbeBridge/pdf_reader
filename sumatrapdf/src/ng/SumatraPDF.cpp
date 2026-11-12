@@ -133,6 +133,8 @@
 #include "GoogleLens.h"
 #include "AIChatCommon.h"
 #include "AIChatPanel.h"
+#include "ContextNotes.h"
+#include "ReflowDocument.h"
 #include "SimpleBrowserWindow.h"
 #include "PdfTools.h"
 #include "Print.h"
@@ -3850,6 +3852,8 @@ void CloseWindow(MainWindow* win, bool quitIfLast, bool) {
     // the provider processes hold a pipe this window's reader thread reads
     ShutdownAIChatForMainWindow(win);
     DestroyAIChatPanel(win);
+    ReflowDocumentDestroy(win);
+    ContextNotesDestroy(win);
     SimpleBrowserWindowCloseFor(win);
     AbortPrinting(win);
     UpdateTabFileDisplayStateForTab(win->CurrentTab());
@@ -5143,6 +5147,21 @@ void ExecuteCmd(MainWindow* win, int cmdId) {
     gLastCmdFellThrough = false;
     if (!win || win->isBeingClosed) {
         return;
+    }
+    if (ReflowDocumentHandleCommand(win, cmdId)) return;
+    switch (cmdId) {
+        case CmdContextNotes:
+            ToggleContextNotes(win);
+            return;
+        case CmdContextAnnotate:
+            AnnotateContextSelection(win);
+            return;
+        case CmdContextSettings:
+            ShowContextSettings(win);
+            return;
+        case CmdReadingHistory:
+            ShowReadingHistory(win);
+            return;
     }
     // the Read Aloud menus carry ids of their own, above CmdLast
     if (HandleReadAloudMenuCommand(win, cmdId)) {

@@ -48,11 +48,17 @@
 // measured on orig's Explorer-themed tree view at 100% (Windows 11): 18 px
 // rows, 19 px a level, the label 25 px in, the glyph a chevron in the text
 // color centered 12 px in
-constexpr float kRowDy = 18;
+constexpr float kDefaultTreeFont = 12;
+static float TreeFontSize() {
+    return gSettings->treeFontSize > 0 ? (float)limitValue(gSettings->treeFontSize, 8, 36) : kDefaultTreeFont;
+}
+static float TreeRowDy() {
+    return TreeFontSize() * 1.5f;
+}
 constexpr float kIndentDx = 19;
 constexpr float kChevronDx = 19;
 constexpr float kRowPadL = 4;
-constexpr float kTreeFontSize = 12;
+
 constexpr float kPaneHeaderDy = 24;
 // gpui XSmall icon button at 96 DPI (1.25rem) and Small input font
 constexpr int kSidebarIconPx = 20;
@@ -83,7 +89,7 @@ struct TocRow {
     int depth;
     // TocWrapText: where the row is in the list and how tall
     float top = 0;
-    float dy = kRowDy;
+    float dy = TreeRowDy();
 };
 
 struct FavRow {
@@ -164,6 +170,8 @@ struct SidebarView {
 
     static void OnTocRowClick(SidebarView* self, gp::Ctx* cx, const gp::ClickEvent* ev, int64_t rowIdx);
     static void OnTocRowDown(SidebarView* self, gp::Ctx* cx, const gp::MouseDownEvent* ev, int64_t rowIdx);
+    static void OnTocZoom(SidebarView*, gp::Ctx*, const gp::ClickEvent*, int64_t delta);
+    static void OnTocWheel(SidebarView*, gp::Ctx*, const gp::ScrollWheelEvent*);
     static void OnTocScroll(SidebarView* self, gp::Ctx* cx, const gp::ScrollEvent* ev);
     static void OnTocFilter(SidebarView* self, gp::Ctx* cx, const gp::InputEvent* ev);
     static void OnFilterKey(SidebarView* self, gp::Ctx* cx, const gp::KeyEvent* ev);
@@ -855,6 +863,16 @@ static bool FavTreeExpandKey(SidebarUI* ui, FavTreeItem* item, int vkey, bool sh
 bool SidebarOnKeyDown(MainWindow* win, int vkey, bool ctrl, bool shift, bool alt) {
     WindowTab* tab = win ? win->CurrentTab() : nullptr;
     SidebarUI* ui = win ? win->sidebar : nullptr;
+    SidebarSlot zoomSlot;
+    if (tab && ui && ctrl && !alt && FocusedSlot(win, &zoomSlot)) {
+        int delta = vkey == VK_ADD || vkey == VK_OEM_PLUS ? 1 : vkey == VK_SUBTRACT || vkey == VK_OEM_MINUS ? -1 : 0;
+        if (delta || vkey == '0') {
+            gSettings->treeFontSize = delta ? limitValue((int)TreeFontSize() + delta, 8, 36) : 0;
+            ScheduleSaveSettings();
+            AppShellInvalidate(win);
+            return true;
+        }
+    }
     if (!tab || !ui || ctrl || alt) {
         return false;
     }
@@ -1358,8 +1376,10 @@ static void FlattenToc(TocItem* item, int depth, Vec<TocRow>& out) {
 // ng: gpui measures text only while painting, so the lines a wrapped title
 // takes are estimated word by word, at about 6 px a character of the 12 px
 // tree font. A wrapped line is a row tall (kWrapLineHeight)
-constexpr float kCharDxEstimate = 6.0f;
-constexpr float kWrapLineHeight = kRowDy / kTreeFontSize;
+static float TreeCharDx() {
+    return TreeFontSize() * .5f;
+}
+constexpr float kWrapLineHeight = 1.5f;
 constexpr int kTocMaxLines = 20;
 // the row's PadR(6), the label box's PadX(2) and the page number's PadL(8)
 constexpr float kTocRowPadsDx = 6 + 4;
@@ -1370,10 +1390,10 @@ static int TocRowLines(MainWindow* win, TocItem* item, int depth, float viewDx) 
     float pageDx = 0;
     if (gSettings->showTocPageNumbers && win->ctrl && item->pageNo > 0) {
         TempStr label = win->ctrl->GetPageLabeTemp(item->pageNo);
-        pageDx = kTocPagePadDx + (float)Utf8CodepointCount(label) * kCharDxEstimate;
+        pageDx = kTocPagePadDx + (float)Utf8CodepointCount(label) * TreeCharDx();
     }
     float avail = viewDx - (kRowPadL + (float)depth * kIndentDx + kChevronDx) - kTocRowPadsDx - pageDx;
-    if (!gSettings->tocWrapText || avail <= kCharDxEstimate) {
+    if (!gSettings->tocWrapText || avail <= TreeCharDx()) {
         return 1;
     }
     Str s = item->title;
@@ -1385,8 +1405,8 @@ static int TocRowLines(MainWindow* win, TocItem* item, int depth, float viewDx) 
         while (i < len(s) && s.s[i] != ' ') {
             i++;
         }
-        float wordDx = (float)Utf8CodepointCount(Str(s.s + start, i - start)) * kCharDxEstimate;
-        float spaceDx = lineDx > 0 ? kCharDxEstimate : 0;
+        float wordDx = (float)Utf8CodepointCount(Str(s.s + start, i - start)) * TreeCharDx();
+        float spaceDx = lineDx > 0 ? TreeCharDx() : 0;
         if (lineDx > 0 && lineDx + spaceDx + wordDx > avail) {
             lines++;
             lineDx = 0;
@@ -1408,7 +1428,7 @@ static float LayoutTocRows(MainWindow* win, Vec<TocRow>& rows, float viewDx) {
     float y = 0;
     for (TocRow& r : rows) {
         r.top = y;
-        r.dy = (float)TocRowLines(win, r.item, r.depth, viewDx) * kRowDy;
+        r.dy = (float)TocRowLines(win, r.item, r.depth, viewDx) * TreeRowDy();
         y += r.dy;
     }
     return y;
@@ -1577,7 +1597,7 @@ bool SidebarContextMenuFromKey(MainWindow* win, gp::Ctx* cx) {
             ui->favRightClick = ui->favSel;
             ui->favMenuValid = false;
             float x = kRowPadL + (float)ui->favRows[i].depth * kIndentDx + kChevronDx;
-            OpenPopupMenuAt(cx, ui->favPopup, x, (float)(i + 1) * kRowDy - ui->favScrollY);
+            OpenPopupMenuAt(cx, ui->favPopup, x, (float)(i + 1) * TreeRowDy() - ui->favScrollY);
             break;
         }
     }
@@ -1594,8 +1614,8 @@ static bool RowLabelTruncated(Str text, int depth, float viewDx, float extraDx) 
 
 static gp::Bounds RowBounds(const gp::Bounds& view, float scrollY, int idx) {
     gp::Bounds b = view;
-    b.y = view.y + (float)idx * kRowDy - scrollY;
-    b.h = kRowDy;
+    b.y = view.y + (float)idx * TreeRowDy() - scrollY;
+    b.h = TreeRowDy();
     return b;
 }
 
@@ -1649,6 +1669,22 @@ void SidebarView::OnFavRowHover(SidebarView* self, gp::Ctx* cx, const gp::HoverE
     HoverTooltipShow(cx, item->text, RowBounds(ui->favView, ui->favScrollY, (int)rowIdx));
 }
 
+void SidebarView::OnTocZoom(SidebarView* self, gp::Ctx* cx, const gp::ClickEvent*, int64_t delta) {
+    gSettings->treeFontSize = delta ? limitValue((int)TreeFontSize() + (int)delta, 8, 36) : 0;
+    ScheduleSaveSettings();
+    AppShellInvalidate(self->win);
+    gp::Notify(cx);
+}
+void SidebarView::OnTocWheel(SidebarView* self, gp::Ctx* cx, const gp::ScrollWheelEvent* ev) {
+    if (!ev->modifiers.control && !ev->modifiers.platform) return;
+    int delta = ev->deltaY > 0 ? 1 : ev->deltaY < 0 ? -1 : 0;
+    if (!delta) return;
+    gSettings->treeFontSize = limitValue((int)TreeFontSize() + delta, 8, 36);
+    const_cast<gp::ScrollWheelEvent*>(ev)->propagate = false;
+    ScheduleSaveSettings();
+    AppShellInvalidate(self->win);
+    gp::Notify(cx);
+}
 void SidebarView::OnTocScroll(SidebarView* self, gp::Ctx* cx, const gp::ScrollEvent* ev) {
     Ui(self->win)->tocScrollY = ev->offsetY;
     gp::Notify(cx);
@@ -1897,12 +1933,12 @@ static float ScrollToRow(float scrollY, float viewH, int idx, int nRows) {
     if (idx < 0 || viewH <= 0) {
         return scrollY;
     }
-    float top = (float)idx * kRowDy;
-    float maxScroll = std::max(0.f, (float)nRows * kRowDy - viewH);
+    float top = (float)idx * TreeRowDy();
+    float maxScroll = std::max(0.f, (float)nRows * TreeRowDy() - viewH);
     if (top < scrollY) {
         scrollY = top;
-    } else if (top + kRowDy > scrollY + viewH) {
-        scrollY = top + kRowDy - viewH;
+    } else if (top + TreeRowDy() > scrollY + viewH) {
+        scrollY = top + TreeRowDy() - viewH;
     }
     return std::max(0.f, std::min(scrollY, maxScroll));
 }
@@ -1954,7 +1990,7 @@ static gp::El* TreeRowLabelBox(gp::Ctx* cx, gp::El* row, Color bg) {
 // whose expand glyph on Windows 10 / 11 is a chevron in the text color: ">"
 // collapsed, "v" expanded. gpui's chevron icons at 16 px are that size
 static gp::El* RowChevron(gp::Ctx* cx, bool hasChildren, bool expanded, Color col) {
-    gp::El* box = gp::Div(cx->a)->W(kChevronDx)->H(kRowDy)->Shrink0()->ItemsCenter()->PadL(1);
+    gp::El* box = gp::Div(cx->a)->W(kChevronDx)->H(TreeRowDy())->Shrink0()->ItemsCenter()->PadL(1);
     if (!hasChildren) {
         return box;
     }
@@ -2334,7 +2370,7 @@ TempStr TocRowsResultTemp(int* exitCodeOut) {
     *exitCodeOut = 0;
     str::Builder out;
     int wrap = gSettings->tocWrapText ? 1 : 0;
-    out.Append(fmt("OK rowDy=%d width=%d wrap=%d\n", (int)kRowDy, (int)ui->tocView.w, wrap));
+    out.Append(fmt("OK rowDy=%d width=%d wrap=%d\n", (int)TreeRowDy(), (int)ui->tocView.w, wrap));
     for (const TocRow& r : ui->tocRows) {
         out.Append(fmt("row y=%d dy=%d title=%s\n", (int)r.top, (int)r.dy, r.item->title));
     }
@@ -2383,6 +2419,17 @@ static gp::El* BuildTocPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
     gp::El* pane = gp::Div(cx->a)->FlexCol()->SizeFull()->Bg(th.tokens.sidebar);
     pane->Child(PaneHeader(win, cx, true, slot, Tr("Bookmarks"), StrL("toc-close"),
                            gp::ListenTo(Ui(win)->view, &SidebarView::OnTocClose)));
+    gp::El* zoom = gp::Div(cx->a)->FlexRow()->W(gp::kFill)->ItemsCenter()->Gap(4);
+    Str labels[] = {StrL("−"), fmt("%d%%", (int)(TreeFontSize() / kDefaultTreeFont * 100)), StrL("+")};
+    const int deltas[] = {-1, 0, 1};
+    for (int i = 0; i < 3; i++) {
+        zoom->Child(gpc::Button::New(cx, GpuiDup(cx->a, fmt("toc-zoom-%d", i)))
+                        ->Label(GpuiDup(cx->a, labels[i]))
+                        ->WithSize(gp::UiSize::Small)
+                        ->OnClick(gp::ListenTo(Ui(win)->view, &SidebarView::OnTocZoom, (int64_t)deltas[i]))
+                        ->IntoEl());
+    }
+    pane->Child(zoom);
 
     gp::InputState* filter = EnsureInput(win, &ui->tocFilter, Tr("Search Bookmarks"));
     filter->onChange = gp::ListenTo(Ui(win)->view, &SidebarView::OnTocFilter);
@@ -2413,7 +2460,7 @@ static gp::El* BuildTocPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
         TocItem* item = ui->tocRows[i].item;
         int depth = ui->tocRows[i].depth;
         float rowDy = ui->tocRows[i].dy;
-        bool isWrapped = rowDy > kRowDy;
+        bool isWrapped = rowDy > TreeRowDy();
         bool isSel = item == ui->tocSel;
         bool isMatch = TocItemIsMultiHighlight(win, item);
         gp::El* row = gp::Div(cx->a)
@@ -2444,7 +2491,7 @@ static gp::El* BuildTocPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
             row->ItemsStart();
             labelBox->ItemsStart()->PadT(2);
             label = gp::TextEl(cx->a, GpuiDup(cx->a, item->title))
-                        ->Font(kTreeFontSize)
+                        ->Font(TreeFontSize())
                         ->Fg(fg)
                         ->Flex1()
                         ->MinW(0)
@@ -2460,10 +2507,11 @@ static gp::El* BuildTocPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
         } else if (len(filterWords) > 0) {
             // orig's DrawTreeItemFilterHighlight: the matched letters get an
             // underlay while the bookmark filter is on
-            label = FilterHighlightText(cx, item->title, filterWords, fg, 13)->Flex1()->MinW(0)->ClipX();
+            label =
+                FilterHighlightText(cx, item->title, filterWords, fg, (int)TreeFontSize())->Flex1()->MinW(0)->ClipX();
         } else {
             label = gp::TextEl(cx->a, GpuiDup(cx->a, item->title))
-                        ->Font(kTreeFontSize)
+                        ->Font(TreeFontSize())
                         ->Fg(fg)
                         ->Flex1()
                         ->MinW(0)
@@ -2487,7 +2535,7 @@ static gp::El* BuildTocPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
                                     (GetBlue(txtCol) * 2 + GetBlue(bg)) / 3);
                 }
                 labelBox->Child(gp::TextEl(cx->a, GpuiDup(cx->a, pageLabel))
-                                    ->Font(kTreeFontSize)
+                                    ->Font(TreeFontSize())
                                     ->Fg(ToGpui(pageCol))
                                     ->PadL(8)
                                     ->Shrink0());
@@ -2513,6 +2561,7 @@ static gp::El* BuildTocPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
                          ->ScrollY(ui->tocScrollY)
                          ->ScrollFromPath()
                          ->OnScroll(gp::ListenTo(Ui(win)->view, &SidebarView::OnTocScroll))
+                         ->OnScrollWheel(gp::ListenTo(Ui(win)->view, &SidebarView::OnTocWheel))
                          ->BoundsOut(&ui->tocView)
                          ->OnMouseDown(gp::ListenTo(Ui(win)->view, &SidebarView::OnTreeDown, 1))
                          ->OnMouseUp(gp::ListenTo(Ui(win)->view, &SidebarView::OnTreeUp, 1))
@@ -2560,11 +2609,11 @@ static gp::El* BuildFavPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot, bool
         gpc::Input::New(cx, GStrL("fav-filter"), filter)->WithSize(gp::UiSize::Small)->W(gp::kFill)->IntoEl()));
 
     float viewH = ui->favView.h > 0 ? ui->favView.h : 200;
-    int first = std::max(0, (int)(ui->favScrollY / kRowDy) - 2);
-    int end = std::min(nRows, (int)((ui->favScrollY + viewH) / kRowDy) + 3);
+    int first = std::max(0, (int)(ui->favScrollY / TreeRowDy()) - 2);
+    int end = std::min(nRows, (int)((ui->favScrollY + viewH) / TreeRowDy()) + 3);
     gp::El* list = gp::Div(cx->a)->FlexCol()->W(gp::kFill);
     if (first > 0) {
-        list->Child(gp::Div(cx->a)->W(gp::kFill)->H((float)first * kRowDy));
+        list->Child(gp::Div(cx->a)->W(gp::kFill)->H((float)first * TreeRowDy()));
     }
     gp::Listener click = gp::ListenTo(Ui(win)->view, &SidebarView::OnFavRowClick, 0);
     gp::Listener down = gp::ListenTo(Ui(win)->view, &SidebarView::OnFavRowDown, 0);
@@ -2580,7 +2629,7 @@ static gp::El* BuildFavPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot, bool
         gp::El* row = gp::Div(cx->a)
                           ->FlexRow()
                           ->W(gp::kFill)
-                          ->H(kRowDy)
+                          ->H(TreeRowDy())
                           ->ItemsCenter()
                           ->PadR(6)
                           ->PadL(kRowPadL + (float)depth * kIndentDx)
@@ -2607,18 +2656,18 @@ static gp::El* BuildFavPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot, bool
         } else if (hasName) {
             Str name = Str(text.s, nameLen);
             Str rest = Str(text.s + nameLen, len(text) - nameLen);
-            labelBox->Child(gp::TextEl(cx->a, GpuiDup(cx->a, name))->Font(kTreeFontSize)->Bold()->Fg(fg)->Shrink0());
+            labelBox->Child(gp::TextEl(cx->a, GpuiDup(cx->a, name))->Font(TreeFontSize())->Bold()->Fg(fg)->Shrink0());
             labelBox->Child(
-                gp::TextEl(cx->a, GpuiDup(cx->a, rest))->Font(kTreeFontSize)->Fg(fg)->Flex1()->MinW(0)->Truncate());
+                gp::TextEl(cx->a, GpuiDup(cx->a, rest))->Font(TreeFontSize())->Fg(fg)->Flex1()->MinW(0)->Truncate());
         } else {
             labelBox->Child(
-                gp::TextEl(cx->a, GpuiDup(cx->a, text))->Font(kTreeFontSize)->Fg(fg)->Flex1()->MinW(0)->Truncate());
+                gp::TextEl(cx->a, GpuiDup(cx->a, text))->Font(TreeFontSize())->Fg(fg)->Flex1()->MinW(0)->Truncate());
         }
         row->Child(labelBox);
         list->Child(row);
     }
     if (end < nRows) {
-        list->Child(gp::Div(cx->a)->W(gp::kFill)->H((float)(nRows - end) * kRowDy));
+        list->Child(gp::Div(cx->a)->W(gp::kFill)->H((float)(nRows - end) * TreeRowDy()));
     }
 
     gp::El* scroll = gp::Div(cx->a)
@@ -2727,7 +2776,7 @@ static gp::El* BuildLayersPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
         gp::El* row = gp::Div(cx->a)
                           ->FlexRow()
                           ->W(gp::kFill)
-                          ->H(kRowDy + 4)
+                          ->H(TreeRowDy() + 4)
                           ->ItemsCenter()
                           ->PadR(6)
                           ->PadL(kRowPadL + (float)layer->depth * kIndentDx)
@@ -2736,7 +2785,7 @@ static gp::El* BuildLayersPane(MainWindow* win, gp::Ctx* cx, SidebarSlot slot) {
         Str text = layer->text;
         if (layer->kind == PdfLayerKind::Label) {
             row->Child(gp::TextEl(cx->a, GpuiDup(cx->a, text))
-                           ->Font(kTreeFontSize)
+                           ->Font(TreeFontSize())
                            ->Fg(ToGpui(txtCol))
                            ->Flex1()
                            ->MinW(0)

@@ -25,7 +25,9 @@
     "test:click": "bun tests/notes-click.ts",
     "test:perf": "bun tests/notes-perf.ts",
     "test:home": "bun tests/notes-home-thumbnails.ts",
-    "test:reflow": "node tests/reflow-browser.mjs && node tests/reflow-anchor.mjs"
+    "test:reflow": "node tests/reflow-browser.mjs && node tests/reflow-anchor.mjs",
+    "build:mac": "node scripts/build-mac.mjs",
+    "install:mac": "node scripts/install-mac.mjs"
   },
   "devDependencies": {
     "@huggingface/transformers": "3.8.1",

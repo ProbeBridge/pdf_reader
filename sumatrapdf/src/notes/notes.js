@@ -28,6 +28,26 @@ let doc = {},
   following = true,
   lastPositions = [],
   documentEpoch = 0;
+let autoSpeech = null,
+  annotationEpoch = 0;
+function cancelAutoSpeech() {
+  autoSpeech?.ctrl.abort();
+  autoSpeech = null;
+}
+function speakNewNote(key, a) {
+  const ctrl = new AbortController();
+  autoSpeech = { key, id: a.id, ctrl };
+  speak(a.quote, null, { signal: ctrl.signal })
+    .catch(() => {})
+    .finally(() => {
+      if (autoSpeech?.ctrl === ctrl) autoSpeech = null;
+    });
+}
+function speakNote(key, a, btn) {
+  if (key !== doc.key) return;
+  if (autoSpeech && (autoSpeech.key !== key || autoSpeech.id !== a.id)) cancelAutoSpeech();
+  return speak(a.quote, btn);
+}
 let settings = await getSettings().catch((err) => {
   showError(err);
   return { ...DEFAULT_SETTINGS };
@@ -107,6 +127,7 @@ function mergeStored(key, p, stored) {
     const a = p.annotations.find((a) => a.id === id);
     if (!a || (turnId && !a.thread.some((t) => t.id === turnId))) ctrl.abort();
   }
+  if (autoSpeech?.key === key && !p.annotations.some((a) => a.id === autoSpeech.id)) cancelAutoSpeech();
 }
 async function syncHighlights() {
   const items = (page?.annotations || []).flatMap((a) =>
@@ -119,6 +140,7 @@ async function changeDocument(d) {
     changed = d.key !== doc.key;
   doc = d;
   if (changed) {
+    cancelAutoSpeech();
     page = null;
     active = null;
     lastPositions = [];
@@ -192,7 +214,7 @@ function makeCard(a, key, p) {
     "detail-toggle",
   );
   const speaker = setIcon(
-    button("", () => speak(a.quote, speaker)),
+    button("", () => speakNote(key, a, speaker)),
     "speak",
     text("朗读", "Read"),
   );
@@ -398,6 +420,8 @@ async function runJob(key, p, a, turn = null) {
 }
 async function annotate(selection) {
   if (!selection?.key || !selection.quote?.trim()) return;
+  const speechEpoch = ++annotationEpoch;
+  cancelAutoSpeech();
   const p = doc.key === selection.key ? await changeDocument(selection) : await loadPage(selection),
     key = selection.key;
   const ranges = selection.ranges || [];
@@ -430,9 +454,11 @@ async function annotate(selection) {
     active = a.id;
     following = true;
   }
+  if (doc.key === key && speechEpoch === annotationEpoch) speakNewNote(key, a);
   await runJob(key, p, a);
 }
 function abortNote(key, id) {
+  if (autoSpeech?.key === key && autoSpeech.id === id) cancelAutoSpeech();
   const prefix = jobKey(key, id);
   for (const [job, ctrl] of jobs) if (job.startsWith(prefix)) ctrl.abort();
 }
@@ -481,7 +507,7 @@ $("#zoom").onclick = () => zoom(100);
 document.addEventListener(
   "wheel",
   (e) => {
-    if (e.ctrlKey) {
+    if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       zoom(settings.panelZoom + (e.deltaY < 0 ? 10 : -10));
     } else following = false;
@@ -497,7 +523,7 @@ window.addEventListener("mousedown", (e) => {
   if (e.clientX >= document.documentElement.clientWidth) following = false;
 });
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey && ["+", "=", "-", "0"].includes(e.key)) {
+  if ((e.ctrlKey || e.metaKey) && ["+", "=", "-", "0"].includes(e.key)) {
     e.preventDefault();
     zoom(e.key === "0" ? 100 : settings.panelZoom + (e.key === "-" ? -10 : 10));
   }
@@ -709,6 +735,7 @@ $("#clear").onclick = async () => {
     return;
   }
   try {
+    cancelAutoSpeech();
     for (const ctrl of jobs.values()) ctrl.abort();
     await withLock(async () => {
       const all = await chrome.storage.local.get(null);
@@ -738,7 +765,11 @@ $("#clear").onclick = async () => {
     showError(err);
   }
 };
-window.addEventListener("documentchange", (e) => changeDocument(e.detail).catch(showError));
+window.addEventListener("documentchange", (e) => {
+  annotationEpoch++;
+  cancelAutoSpeech();
+  changeDocument(e.detail).catch(showError);
+});
 window.addEventListener("annotate", (e) => annotate(e.detail).catch(showError));
 window.addEventListener("deletenote", (e) => {
   const { key, id } = e.detail;
@@ -750,6 +781,14 @@ window.addEventListener("deletenote", (e) => {
     if (a) await deleteNote(a, key, p);
   };
   remove().catch(showError);
+});
+window.addEventListener("speaknote", (e) => {
+  const { key, id } = e.detail || {};
+  if (key !== doc.key) return;
+  const a = page?.annotations.find((a) => a.id === id);
+  if (!a) return;
+  const btn = document.getElementById(`ann-${id}`)?.querySelector(".inline-speak");
+  Promise.resolve(speakNote(key, a, btn)).catch(showError);
 });
 window.addEventListener("focusnote", (e) => {
   active = e.detail.id;

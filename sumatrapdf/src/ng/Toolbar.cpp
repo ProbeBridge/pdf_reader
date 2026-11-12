@@ -35,6 +35,7 @@
 #include "SumatraPDF.h"
 #include "MainWindow.h"
 #include "AIChatTypes.h"
+#include "ReflowDocument.h"
 #include "WindowTab.h"
 #include "gui/AppShell.h"
 #include "gui/DocCanvas.h"
@@ -1159,6 +1160,8 @@ static gp::El* ToolbarButton(MainWindow* win, gp::Ctx* cx, int idx, const Toolba
     bool noTranslate = idx >= gLayoutButtonsCount;
     if (bi.isText) {
         Str label = noTranslate ? bi.toolTip : trans::GetTranslation(bi.toolTip);
+        if (bi.cmdId == CmdToggleDocumentReflow)
+            label = ReflowDocumentVisible(win) ? StrL("重排：开") : StrL("重排：关");
         b->Child(gp::TextEl(cx->a, GpuiDup(cx->a, label))->Font(13)->Fg(ToGpui(fg)));
         return b;
     }

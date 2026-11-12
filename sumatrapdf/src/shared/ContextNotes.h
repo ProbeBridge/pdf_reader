@@ -15,4 +15,6 @@ bool ContextNotesHome(MainWindow* win);
 void PaintContextNotes(MainWindow* win, Gfx* gfx);
 void ContextNotesClick(MainWindow* win, int x, int y);
 void ContextNotesCancelClick(MainWindow* win);
+void ContextNoteSpeak(MainWindow* win, Str id);
+void ContextNoteDelete(MainWindow* win, Str id);
 bool ContextNotesHover(MainWindow* win, Point point);

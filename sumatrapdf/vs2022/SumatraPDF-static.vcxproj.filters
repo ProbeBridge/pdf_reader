@@ -120,10 +120,10 @@
     <ClInclude Include="..\src\ContextNoteOverlay.h">
       <Filter>src</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\ContextNotes.h">
+    <ClInclude Include="..\src\shared\ContextNotes.h">
       <Filter>src</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\ContextNotesNetwork.h">
+    <ClInclude Include="..\src\shared\ContextNotesNetwork.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\DarkMode.h">
@@ -168,7 +168,7 @@
     <ClInclude Include="..\src\PageThumbnails.h">
       <Filter>src</Filter>
     </ClInclude>
-    <ClInclude Include="..\src\ReflowDocument.h">
+    <ClInclude Include="..\src\shared\ReflowDocument.h">
       <Filter>src</Filter>
     </ClInclude>
     <ClInclude Include="..\src\RegistryPreview.h">
@@ -821,10 +821,10 @@
     <ClCompile Include="..\src\ContextNoteOverlay.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\ContextNotes.cpp">
+    <ClCompile Include="..\src\shared\ContextNotesCommon.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\ContextNotesNetwork.cpp">
+    <ClCompile Include="..\src\shared\ContextNotesNetworkCommon.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\CustomZoomDialog.cpp">
@@ -947,7 +947,7 @@
     <ClCompile Include="..\src\RefHoverPopup.cpp">
       <Filter>src</Filter>
     </ClCompile>
-    <ClCompile Include="..\src\ReflowDocument.cpp">
+    <ClCompile Include="..\src\shared\ReflowDocumentCommon.cpp">
       <Filter>src</Filter>
     </ClCompile>
     <ClCompile Include="..\src\RegistryPreview.cpp">

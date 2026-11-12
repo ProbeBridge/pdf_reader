@@ -40,9 +40,7 @@
 #include "ReadAloud.h"
 #include "Toolbar.h"
 #include "ToolbarCommon.h"
-#if !defined(SUMATRA_NG)
 #include "ReflowDocument.h"
-#endif
 
 int gLayoutButtonsCount = 0;
 
@@ -280,12 +278,10 @@ int ZoomHoverCurrentIdx(MainWindow* win, const Vec<ZoomHoverLevel>& levels) {
         return -1;
     }
     float current = ctrl->GetZoomVirtual(false);
-#if !defined(SUMATRA_NG)
     int reflowZoom = ReflowDocumentZoom(win);
     if (reflowZoom > 0) {
         current = (float)reflowZoom;
     }
-#endif
     // the same fuzz DisplayModel::GetNextZoomStep uses to match a level
     constexpr float kZoomFuzz = 0.01f;
     for (int i = 0; i < len(levels); i++) {
@@ -652,11 +648,7 @@ const int kPdfAnnotationButtonsCount = dimofi(gPdfAnnotationButtons);
 bool IsCmdAvailable(MainWindow* win, int cmdId, AppCommandCtx* ctx) {
     switch (cmdId) {
         case CmdToggleDocumentReflow:
-#if !defined(SUMATRA_NG)
             return ReflowDocumentAvailable(win);
-#else
-            return false;
-#endif
         case CmdZoomFitWidthAndContinuous:
         case CmdZoomFitPageAndSinglePage:
         case CmdRotateLeft:
@@ -691,11 +683,7 @@ bool IsCmdAvailable(MainWindow* win, int cmdId, AppCommandCtx* ctx) {
 bool IsCmdEnabled(MainWindow* win, int cmdId, AppCommandCtx* ctx) {
     switch (cmdId) {
         case CmdToggleDocumentReflow:
-#if !defined(SUMATRA_NG)
             return ReflowDocumentAvailable(win);
-#else
-            return false;
-#endif
         case CmdNextTab:
         case CmdPrevTab:
         case CmdNextTabSmart:

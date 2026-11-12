@@ -1,15 +1,30 @@
 /* Copyright 2026 the SumatraPDF project authors (see AUTHORS file).
    License: GPLv3 */
 
+#if defined(SUMATRA_NG)
+#include "gui/GpuiBridge.h"
+#else
 #include "base/Base.h"
+#endif
 #include "base/File.h"
 #include "base/Win.h"
 #include "base/JsonParser.h"
 #include "base/UITask.h"
+#if !OS_WIN
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include "gui/UIModels.h"
 #include "gui/Layout.h"
+#if !defined(SUMATRA_NG)
 #include "gui/win/WinGui.h"
+#endif
+#if defined(SUMATRA_NG)
+#include "NotesWebView.h"
+#else
 #include "gui/win/WebView.h"
+#endif
+#include "VirtKeys.h"
 #include "Settings.h"
 #include "AppSettings.h"
 #include "AppTools.h"
@@ -19,12 +34,23 @@
 #include "TextSelection.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
+#include "ContextNotesPlatform.h"
 #include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "Commands.h"
+#if !defined(SUMATRA_NG)
 #include "Canvas.h"
+#endif
 #include "Toolbar.h"
+#if !defined(SUMATRA_NG)
 #include "ContextNoteOverlay.h"
+#else
+void HideContextNoteActions(MainWindow*);
+void DestroyContextNoteActions(MainWindow*);
+void ShowContextNoteActions(MainWindow*, Str, Point);
+void ContextNoteDelete(MainWindow*, Str);
+void ContextNoteSpeak(MainWindow*, Str);
+#endif
 #include "ReflowDocument.h"
 
 struct ReflowCache;
@@ -37,13 +63,17 @@ struct ReflowCenter {
     double y = 0;
 };
 
-struct ReflowView : WebviewWnd {
+#if !defined(SUMATRA_NG)
+using NotesWebBase = WebviewWnd;
+#endif
+struct ReflowView : NotesWebBase {
     MainWindow* win = nullptr;
     HWND frame = nullptr;
     WindowTab* tab = nullptr;
     EngineBase* engine = nullptr; // AddRef: survives tab closure until view destruction
     u64 epoch = 0;
     bool enabled = false;
+    bool blocked = false;
     bool ready = false;
     bool closing = false;
     int page = 1;
@@ -138,11 +168,13 @@ static void ShowOriginalCenter(ReflowView* view, Str data) {
         dm->GoToPage(center.page, false);
         Size size = dm->GetViewPort().Size();
         Point screen = dm->CvtToScreen(center.page, PointF((float)center.x, (float)center.y));
-        dm->ScrollXBy(screen.x - size.dx / 2);
-        dm->ScrollYBy(screen.y - size.dy / 2, false);
+        int dx = screen.x - size.dx / 2;
+        int dy = screen.y - size.dy / 2;
+        if (dx != 0) dm->ScrollXBy(dx);
+        if (dy != 0) dm->ScrollYBy(dy, false);
     }
     ToolbarUpdateStateForWindow(win, false);
-    ScheduleUiUpdate(win, kUiForceRelayout | kUiToolbarDirty);
+    NotesUpdate(win);
     ScheduleRepaint(win, 0);
 }
 
@@ -171,9 +203,17 @@ struct ReflowCache {
             str::Free(path);
             path = str::Dup(named);
         }
+#if OS_WIN
         handle =
             CreateFileW(CWStrTemp(path), GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ | FILE_SHARE_DELETE,
                         nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+#else
+        handle = file::OpenReadWrite(path, true);
+        if (handle != file::kInvalidFileHandle) {
+            chmod(CStrTemp(path), 0600);
+            unlink(CStrTemp(path));
+        }
+#endif
         if (handle == file::kInvalidFileHandle) return;
         file::WriteAll(handle,
                        fmt("{\"format\":\"SumatraPDF ordered XHTML\",\"version\":1,\"source\":%s,\"pageCount\":%d}\n",
@@ -193,12 +233,25 @@ struct ReflowCache {
     bool Read(const ReflowCacheEntry& entry, ReflowPageData& data) {
         constexpr int maxRecordBytes = 128 * 1024 * 1024;
         if (entry.size <= 0 || entry.size > maxRecordBytes) return false;
+#if OS_WIN
         LARGE_INTEGER offset;
         offset.QuadPart = entry.offset;
         if (!SetFilePointerEx(handle, offset, nullptr, FILE_BEGIN)) return false;
+#endif
         Str record(AllocArray<char>(entry.size), entry.size);
+#if OS_WIN
         DWORD count = 0;
         bool ok = ::ReadFile(handle, record.s, entry.size, &count, nullptr) && count == (DWORD)entry.size;
+#else
+        int done = 0;
+        while (done < entry.size) {
+            ssize_t n = pread(handle, record.s + done, entry.size - done, entry.offset + done);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            done += n;
+        }
+        bool ok = done == entry.size;
+#endif
         if (ok) {
             json::Reader reader(record);
             int page = 0;
@@ -282,7 +335,7 @@ static void ReflowSetZoom(ReflowView* view, int zoom) {
     // Keep the WebView's own page zoom at 100%; only the content's typography
     // changes, so tables/images remain constrained to the available width.
     ReflowEvent(view, StrL("reflowzoom"), fmt("{\"zoom\":%d}", view->zoom));
-    ScheduleUiUpdate(view->win, kUiToolbarDirty);
+    NotesUpdate(view->win);
 }
 
 bool ReflowDocumentZoomBy(MainWindow* win, float factor) {
@@ -315,7 +368,7 @@ struct ReflowPageTask {
 
 static void FinishReflowPage(ReflowPageTask* task) {
     ReflowView* view =
-        IsMainWindowValid(task->win) && task->win->hwndFrame == task->frame ? FindReflow(task->win) : nullptr;
+        IsMainWindowValid(task->win) && NotesFrame(task->win) == task->frame ? FindReflow(task->win) : nullptr;
     if (view && view->epoch == task->epoch) {
         view->pendingPages--;
         if (ReflowDocumentVisible(task->win) && view->engine == task->engine) {
@@ -345,12 +398,7 @@ static void LoadReflowPage(ReflowPageTask* task) {
 }
 
 static TempStr ReflowAssets() {
-    WCHAR exe[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exe, dimof(exe));
-    Str dir = path::GetDirTemp(ToUtf8Temp(WStr(exe)));
-    Str assets = path::JoinTemp(dir, StrL("notes"));
-    if (path::IsDirectory(assets)) return str::DupTemp(assets);
-    return path::JoinTemp(path::GetDirTemp(path::GetDirTemp(dir)), StrL("src\\notes"));
+    return NotesAssetsTemp();
 }
 
 static bool ReflowResource(void*, Str resource, WebViewResourceResult* out) {
@@ -420,7 +468,7 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         } else {
             auto* task = new ReflowPageTask();
             task->win = win;
-            task->frame = win->hwndFrame;
+            task->frame = NotesFrame(win);
             task->engine = view->engine;
             task->epoch = view->epoch;
             task->page = page;
@@ -456,6 +504,8 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         ContextNotesReflowPositions(win, ReflowField(data, StrL("items")));
     } else if (str::Eq(action, StrL("focus"))) {
         ContextNotesReflowFocus(win, ReflowField(data, StrL("id")));
+    } else if (str::Eq(action, StrL("speak"))) {
+        ContextNoteSpeak(win, ReflowField(data, StrL("id")));
     } else if (str::Eq(action, StrL("delete"))) {
         ContextNoteDelete(win, ReflowField(data, StrL("id")));
     } else if (str::Eq(action, StrL("position"))) {
@@ -466,7 +516,7 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         if (navigation == view->navigation && page > 0 && page <= view->engine->PageCount() && page != view->page) {
             view->page = page;
             win->AsFixed()->GoToPage(page, false);
-            ScheduleUiUpdate(win, kUiToolbarDirty);
+            NotesUpdate(win);
         }
     } else if (str::Eq(action, StrL("zoom"))) {
         ReflowSetZoom(view, atoi(CStrTemp(ReflowField(data, StrL("zoom")))));
@@ -474,7 +524,7 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         if (!HasPermission(Perm::CopySelection) || !view->engine->allowsCopyingText)
             error = 1;
         else
-            CopyTextToClipboard(ReflowField(data, StrL("text")));
+            NotesCopy(win, ReflowField(data, StrL("text")));
     } else if (str::Eq(action, StrL("close"))) {
         ShowOriginalCenter(view, data);
     } else if (str::Eq(action, StrL("original-center"))) {
@@ -489,7 +539,7 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
 static ReflowView* CreateReflow(MainWindow* win) {
     auto* view = new ReflowView();
     view->win = win;
-    view->frame = win->hwndFrame;
+    view->frame = NotesFrame(win);
     view->tab = win->CurrentTab();
     view->engine = win->AsFixed()->GetEngine();
     view->engine->AddRef();
@@ -509,8 +559,10 @@ static ReflowView* CreateReflow(MainWindow* win) {
     view->allowExternalDrop = false;
     view->defaultBackgroundColor = MkRgb(255, 255, 255);
     CreateWebViewArgs args;
-    args.parent = win->hwndCanvas;
+    args.parent = NotesCanvas(win);
+#if !defined(SUMATRA_NG)
     args.pos = HwndClientRect(args.parent);
+#endif
     if (!view->Create(args)) {
         delete view;
         return nullptr;
@@ -531,14 +583,16 @@ void ReflowDocumentLayout(MainWindow* win) {
         ReflowDocumentDestroy(win);
         return;
     }
-    bool visible = ReflowDocumentVisible(win);
+    bool visible = ReflowDocumentVisible(win) && !view->blocked;
     view->SetIsVisible(visible);
     if (!visible) return;
     // Native scrollbars belong to the original fixed-layout view. Reflow has
     // its own vertical scroll and never changes the PDF's zoom or page boxes.
-    ShowScrollBar(win->hwndCanvas, SB_BOTH, FALSE);
-    Rect rect = HwndClientRect(win->hwndCanvas);
+#if !defined(SUMATRA_NG)
+    ShowScrollBar(NotesCanvas(win), SB_BOTH, FALSE);
+    Rect rect = HwndClientRect(NotesCanvas(win));
     if (!(HwndClientRect(view->hwnd).Size() == rect.Size())) HwndMoveWindow(view->hwnd, &rect);
+#endif
     int page = dm->CurrentPageNo();
     if (view->page != page) {
         view->page = page;
@@ -591,7 +645,7 @@ bool ReflowDocumentHandleCommand(MainWindow* win, int cmdId) {
             view->Focus();
         }
         ToolbarUpdateStateForWindow(win, false);
-        ScheduleUiUpdate(win, kUiForceRelayout | kUiToolbarDirty);
+        NotesUpdate(win);
         ScheduleRepaint(win, 0);
         return true;
     }
@@ -653,3 +707,33 @@ bool ReflowDocumentHandleCommand(MainWindow* win, int cmdId) {
     }
     return false;
 }
+
+#if defined(SUMATRA_NG)
+gp::El* ReflowDocumentBuild(MainWindow* win, gp::Ctx* cx) {
+    auto* view = FindReflow(win);
+    return view && ReflowDocumentVisible(win) ? BrowserViewBuild(view->browser, cx) : nullptr;
+}
+bool ReflowDocumentReady(MainWindow* win) {
+    auto* view = FindReflow(win);
+    return view && view->ready;
+}
+#endif
+
+#if defined(SUMATRA_NG)
+TempStr ReflowDocumentTestTemp(MainWindow* win, Str script) {
+    auto* view = FindReflow(win);
+    if (!view) return StrL("no-view");
+    if (script) view->TestEval(script);
+    return str::DupTemp(view->testResult);
+}
+#endif
+
+#if defined(SUMATRA_NG)
+void ReflowDocumentBlockView(MainWindow* win, bool blocked) {
+    auto* view = FindReflow(win);
+    if (view) {
+        view->blocked = blocked;
+        view->SetIsVisible(ReflowDocumentVisible(win) && !blocked);
+    }
+}
+#endif

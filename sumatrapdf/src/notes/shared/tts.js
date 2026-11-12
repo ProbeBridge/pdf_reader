@@ -205,30 +205,53 @@ if (hasSystemVoice) speechSynthesis.getVoices(); // start loading the voice list
 
 // ---------------------------------------------------------------- public
 
-let active = null; // { btn, stopped, stop }
+let active = null; // { text, buttons, stopped, stop, promise }
 
 function finish(job) {
   if (!job || job.stopped) return;
   job.stopped = true;
   job.stop?.();
-  job.btn?.classList.remove('on');
+  for (const btn of job.buttons) btn.classList.remove('on');
+  for (const cleanup of job.cleanups) cleanup();
+  job.cleanups = [];
   if (active === job) active = null;
+}
+
+function bindSpeech(job, btn, signal) {
+  if (btn) {
+    job.buttons.add(btn);
+    btn.classList.add('on');
+  }
+  if (!signal) return;
+  const onAbort = () => finish(job);
+  signal.addEventListener('abort', onAbort, { once: true });
+  job.cleanups.push(() => signal.removeEventListener('abort', onAbort));
 }
 
 export const canSpeak = () => typeof Worker !== 'undefined' || hasSystemVoice;
 
-/** Read `text` aloud; `btn` shows the "on" state until it finishes. A new call cuts off the previous one. */
-export async function speak(text, btn) {
+/** Reuse identical speech while it is pending or playing; a different text interrupts it. */
+export function speak(text, btn, { signal } = {}) {
   const clean = tidy(text);
-  if (!clean) return;
+  if (!clean || signal?.aborted) return Promise.resolve();
+  if (active && !active.stopped && active.text === clean) {
+    bindSpeech(active, btn, signal);
+    return active.promise;
+  }
   finish(active);
-  const job = { btn, stopped: false, stop: null };
+  const job = { text: clean, buttons: new Set(), cleanups: [], stopped: false, stop: null, promise: null };
+  let resolve, reject;
+  job.promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
   active = job;
-  btn?.classList.add('on');
-  // Created inside the click so the browser lets it make sound.
-  ctx ||= new AudioContext();
-  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  bindSpeech(job, btn, signal);
+  runSpeech(clean, job).then(resolve, reject);
+  return job.promise;
+}
+
+async function runSpeech(clean, job) {
   try {
+    ctx ||= new AudioContext();
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
     let clip = null;
     try {
       clip = await neuralClip(clean);

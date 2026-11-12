@@ -1,14 +1,17 @@
 # SumatraPDF AI
 
+同一分支构建 Windows（Win32）和 macOS（ng / GPUI）版本，共用文档引擎、AI 注释、重排和阅读历史逻辑。
+
 在 SumatraPDF 原生阅读器中加入 AI 注释侧栏和按时间分组的阅读历史。AI 调用、提示词、音标解析和离线朗读移植自 `chrome_notes_ex` 的 `4b12e8d` 版本；SumatraPDF 完整源码位于 `sumatrapdf/`，基于 `b1a8e22`。本仓库可独立安装依赖和构建。
 
 ## 使用
 
 从桌面或开始菜单打开 **SumatraPDF AI**。在注释侧栏点击齿轮，选择 Gemini、Anthropic 或 OpenAI 兼容接口，填写 API Key、模型和接口地址，测试连接后保存。Gemini 默认模型为 `auto`；提示词、思考深度、音标和单击注释可在设置中调整。
 
-- 单击英文词，或选中文字后点击浮动工具栏的「AI 注释」，生成中文释义、音标和折叠详解。
+- 单击英文词，或选中文字后点击浮动工具栏的「AI 注释」，生成中文释义、音标和折叠详解。新建注释时，同时请求 LLM 和合成原文语音；音频就绪后自动播放一次。恢复已有注释、重新生成和追问不自动重播。
 - 注释首行按「单词 → 朗读按钮 → 音标」排列，点击喇叭即可朗读原词；「详解」可单独展开、折叠。
-- 悬停注释可朗读、追问、重新生成、复制 Markdown 或删除；点击原文或页码返回 PDF。追问按 Enter 发送、Shift+Enter 换行。
+- 悬停侧栏注释可朗读、追问、重新生成、复制 Markdown 或删除；点击原文或页码返回 PDF。追问按 Enter 发送、Shift+Enter 换行。
+- 在原版 PDF 或重排正文中，悬停被注释的单词会显示播放和删除按钮；光标从单词移到操作栏时按钮保持显示。点击播放可重听原文，复用已合成的缓存；同一单词仍在合成或播放时重复触发会继续当前播放，完成后才重播。悬停本身不播放。
 - 注释和追问点击删除后直接生效；整条注释删除后可点击「撤销」恢复。
 - 注释正文采用1.5倍行高，段落、列表和卡片间距紧凑，行高随注释字号同步缩放。
 - 朗读使用本地 Kokoro Bella 美式女声，语速 0.8 倍。模型或运行环境不可用时使用系统语音。
@@ -47,6 +50,27 @@
 | 重排页 `Ctrl` 加 `+` / `-` / `0` | 调整或恢复正文字号 |
 
 ## 构建与安装
+
+### macOS
+
+需要 Xcode 命令行工具、Node.js 24 或更新版本及 clang-format；Bun 由 `npm ci` 安装。构建当前 Mac 的本机架构：
+
+```sh
+npm ci
+npm run vendor:kokoro
+npm run build:mac
+npm run install:mac -- --launch
+```
+
+应用安装到 `~/Applications/SumatraPDF AI.app`，Finder 的「打开方式」可选择它。升级前退出应用，再运行相同的安装命令；升级保留数据。调试构建使用 `npm run build:mac -- --debug`。
+
+macOS 使用 WKWebView 承载现有网页层，支持选字和单击注释、原文高亮、重排、阅读历史及目录字号。目录顶部的 `−` / 百分比 / `+` 调整字号，也支持目录内按住 Control 或 Command 滚轮缩放。Windows 默认快捷键中的 Control 在 Mac 主窗口通常对应 Command；注释和重排网页内两者均可使用。朗读优先使用本地 Kokoro，失败时使用系统语音。
+
+设置与加密注释保存在 `~/Library/Application Support/SumatraPDF-AI`，与官方 ng 隔离。注释文件使用 AES-256-CBC 加 HMAC-SHA256，随机密钥保存在当前用户的 macOS 钥匙串。Windows 继续使用 DPAPI。跨系统迁移通过界面导出、导入 JSON，不复制加密文件；导出文件不含 API Key。
+
+Mac 构建包位于 `sumatrapdf/out/mac/rel/.bundle.noindex/SumatraPDF AI.app`，开发副本不参与应用搜索；安装版固定保留在 `~/Applications/SumatraPDF AI.app`。使用本地 ad-hoc 签名，未做公开分发所需的 Developer ID 签名与公证。
+
+### Windows
 
 需要 Windows x64、Node.js 24 或更新版本、Visual Studio C++ 构建工具与 Windows SDK，以及可从 PATH 调用的 Ninja 和 clang-format。当前构建使用 MSVC 14.52、Windows SDK 10.0.26100.0。从 **x64 Developer PowerShell for Visual Studio** 进入本目录运行：
 
@@ -93,6 +117,8 @@ npm test                  # 注释界面、网络请求、千条历史搜索
 npm run test:history      # 历史解析与合并 fixture
 npm run test:tts          # 拦截外网后的离线语音合成
 npm run test:reflow       # HTML 重排与文本定位
+node tests/notes-autoplay.mjs # 并行合成、自动播放一次及手动重播
+node tests/reflow-play.mjs    # 重排正文的悬停播放、删除与操作栏保持
 npm run test:native       # 真实原生窗口与 PDF
 npm run test:click        # 单击注释
 npm run test:perf         # 原生性能
@@ -111,4 +137,18 @@ npx bun tests/reflow-native.ts # 原生重排、表格图片与注释
 
 性能回归覆盖无注释悬停不提取文字、有限 UIA 文本预览按需读取、离屏页面虚拟化，以及普通启动时不为旧历史生成封面或自动隐藏失效路径。历史页不会预先打开列表中的文档。
 
-原生注释集成在 `sumatrapdf/src/ContextNotes.cpp`，重排窗口在 `sumatrapdf/src/ReflowDocument.cpp`，PDF 内容提取在 `sumatrapdf/src/shared/EngineMupdf.cpp`。侧栏、历史与重排界面位于 `sumatrapdf/src/notes/`，复用模块在其 `shared/` 下。SumatraPDF 许可证见 `sumatrapdf/COPYING` 和 `COPYING.BSD`。Kokoro、Transformers.js 和 phonemizer 的 Apache-2.0 许可证，以及 ONNX Runtime 的 MIT 许可证，保存在 `notes/vendor/kokoro/LICENSE.*` 并随程序安装；ONNX Runtime 原文固定于上游 `89f8206`，源码副本位于 `scripts/licenses/`，打包时校验 SHA-256。
+共用注释逻辑在 `sumatrapdf/src/shared/ContextNotesCommon.cpp`，共用重排逻辑在 `sumatrapdf/src/shared/ReflowDocumentCommon.cpp`；Mac 界面与钥匙串适配在 `sumatrapdf/src/ng/ContextNotes.cpp` 和 `NotesStorage_mac.mm`，PDF 内容提取在 `sumatrapdf/src/shared/EngineMupdf.cpp`。侧栏、历史与重排界面位于 `sumatrapdf/src/notes/`，复用模块在其 `shared/` 下。SumatraPDF 许可证见 `sumatrapdf/COPYING` 和 `COPYING.BSD`。Kokoro、Transformers.js 和 phonemizer 的 Apache-2.0 许可证，以及 ONNX Runtime 的 MIT 许可证，保存在 `notes/vendor/kokoro/LICENSE.*` 并随程序安装；ONNX Runtime 原文固定于上游 `89f8206`，源码副本位于 `scripts/licenses/`，打包时校验 SHA-256。
+
+Mac 原生验证（从 `sumatrapdf/` 运行）：
+
+```sh
+../node_modules/.bin/bun cmd/ng-build.ts -dbg test_util -run -- -for-ai
+../node_modules/.bin/bun tests/ad-hoc-mac-notes.ts
+../node_modules/.bin/bun tests/ad-hoc-mac-notes-speech.ts
+../node_modules/.bin/bun tests/ad-hoc-mac-toc.ts
+python3 tests/ad-hoc-mac-crypto.py
+```
+
+原生验证使用临时数据目录和本地模拟 AI 服务，覆盖实际 WKWebView 的 Promise 桥接、注释存储、流式请求和取消、选字生成注释、重排缓存及历史页；同时检查离线 Kokoro 合成或系统语音回退。加密验证使用独立测试钥匙串条目，结束后删除，不读取用户密钥。
+
+语音原生回归使用真实 WKWebView 的 Web Audio，静音输出并等待完整音频结束，验证 LLM 回复尚未返回时自动播放一次，以及正文和重排的手动重播。

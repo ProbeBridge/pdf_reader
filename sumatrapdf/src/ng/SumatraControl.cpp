@@ -55,6 +55,7 @@
 #endif
 #include "SumatraPDF.h"
 #include "MainWindow.h"
+#include "NotesPlatform.h"
 #include "AIChatTypes.h"
 #include "WindowTab.h"
 #include "HomePage.h"
@@ -2978,6 +2979,10 @@ static void ExecuteControlRequest(ControlRequest* req) {
 
         case ControlCmd::TestUiState: {
             Str op = StringArg(req, 0);
+            if (str::Eq(op, StrL("notes"))) {
+                AppendTestResult(req, 0, ContextNotesTestTemp(FirstWindow(), StringArg(req, 1), StringArg(req, 2)));
+                break;
+            }
             if (len(op) > 0) {
                 i32 arg = 0;
                 IntArg(req, 1, arg);

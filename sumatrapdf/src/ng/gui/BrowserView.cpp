@@ -14,6 +14,7 @@
 
 #include "base/GuessFileType.h"
 #include "base/Win.h"
+#include "base/JsonParser.h"
 #if OS_WIN
 #include "../../../ext/webview2/WebView2.h"
 #endif
@@ -80,16 +81,30 @@ static const char* kReportScrollJs = R"JS((function(){
 // uses here: window.__sumatra__.notify(method, ...args). Posted as the line
 // "notify <method> <params as a JSON array>".
 static const char* kJsNotifyJs = R"JS((function(){
-  if (window.__sumatra__) { return; }
-  var S = {};
+  if (window.__sumatra__) return;
+  var pending = {}, serial = 0, S = {};
+  function post(s) {
+    var wv = window.chrome && window.chrome.webview;
+    if (wv && wv.postMessage) wv.postMessage(s);
+    else window.ipc.postMessage(s);
+  }
   S.notify = function(method) {
-    var params = Array.prototype.slice.call(arguments, 1);
-    try {
-      var s = "notify " + method + " " + JSON.stringify(params);
-      var wv = window.chrome && window.chrome.webview;
-      if (wv && wv.postMessage) { wv.postMessage(s); return; }
-      if (window.ipc && window.ipc.postMessage) { window.ipc.postMessage(s); }
-    } catch (e) {}
+    post("notify " + method + " " + JSON.stringify(Array.prototype.slice.call(arguments, 1)));
+  };
+  S.call = function(method) {
+    var id = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) + "-" + (++serial), params = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function(resolve, reject) {
+      pending[id] = {resolve:resolve, reject:reject};
+      post(JSON.stringify({__sumatraCall:1,id:id,method:method,params:JSON.stringify(params)}));
+    });
+  };
+  S.onReply = function(id, status, result) {
+    var p = pending[id];
+    if (!p) return;
+    delete pending[id];
+    try { var value = JSON.parse(result); }
+    catch(e) { p.reject(e); return; }
+    if (status === 0) p.resolve(value); else p.reject(value);
   };
   window.__sumatra__ = S;
 })();)JS";
@@ -228,7 +243,10 @@ static void OnResourceRequest(void* ctx, gp::Str, const wry::Request* request, w
         RespondWith(responder, notFound, StrL("text/plain"), 404);
         return;
     }
-    RespondWith(responder, data, ChmMimeFromPathTemp(path, data), 200);
+    Str type = ChmMimeFromPathTemp(path, data);
+    if (str::EndsWithI(path, StrL(".mjs"))) type = StrL("text/javascript");
+    if (str::EndsWithI(path, StrL(".wasm"))) type = StrL("application/wasm");
+    RespondWith(responder, data, type, 200);
 }
 
 // orig's UrlForWebViewEvent: an in-document url reaches the model with the
@@ -359,6 +377,20 @@ static void OnIpcMessage(void* ctx, gp::Str, gp::Str body) {
         return;
     }
     Str msg = FromGpui(body);
+    if (str::StartsWith(msg, StrL("{\"__sumatraCall\":1"))) {
+        Str id, method, params;
+        json::Reader reader(msg);
+        for (json::Value& v : reader) {
+            if (json::PathMatch(v.path, StrL("/id")))
+                id = v.value;
+            else if (json::PathMatch(v.path, StrL("/method")))
+                method = v.value;
+            else if (json::PathMatch(v.path, StrL("/params")))
+                params = v.value;
+        }
+        if (reader.Ok() && id && method && bv->cb) bv->cb->OnJsCall(id, method, params);
+        return;
+    }
     int x = 0, y = 0;
     if (!str::IsNull(str::Parse(msg, "scroll %d %d", &x, &y))) {
         bv->scrollPos = Point(std::max(x, 0), std::max(y, 0));

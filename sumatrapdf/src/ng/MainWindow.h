@@ -190,7 +190,9 @@ struct StressTest;
 // ng: orig's MainWindow is ~500 fields of win32 UI state (toolbar, sidebar,
 // find bar, annotations, touch, UIA, ...). This is the part the gpui shell
 // needs now; the rest comes back with the step that draws it.
+struct ContextNotes;
 struct MainWindow {
+    ContextNotes* contextNotes = nullptr;
     explicit MainWindow(gpui::Window* w);
     MainWindow(const MainWindow&) = delete;
     MainWindow& operator=(const MainWindow&) = delete;

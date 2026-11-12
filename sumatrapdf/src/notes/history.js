@@ -105,7 +105,7 @@ $("#search").addEventListener("input", render);
 $("#open").addEventListener("click", () => native("openPicker").catch(showError));
 $("#notes").addEventListener("click", () => native("showNotes").catch(showError));
 document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey && ["f", "h"].includes(e.key.toLowerCase())) || e.key === "/") {
+  if (((e.ctrlKey || e.metaKey) && ["f", "h"].includes(e.key.toLowerCase())) || e.key === "/") {
     e.preventDefault();
     $("#search").focus();
   }

@@ -2208,7 +2208,7 @@ void StartAutoScrollAtCursor(MainWindow* win) {
         return;
     }
     ReadingAutoScrollStop(win);
-    Point pt = HwndGetCursorPos(win->hwndCanvas);
+    Point pt = HwndScreenToClient(win->hwndCanvas, UiCursorScreenPos());
     ToggleAutoScroll(win, pt.x, pt.y);
 }
 
@@ -3388,6 +3388,7 @@ static LRESULT OnSetCursorMouseNone(MainWindow* win, HWND hwnd) {
         if (!annotEditHover && ContextNotesHover(win, pt)) {
             return TRUE;
         }
+        HideContextNoteActions(win);
         if (annotEditHover) {
             SetCursorCached(IDC_HAND);
         } else {
@@ -3396,6 +3397,7 @@ static LRESULT OnSetCursorMouseNone(MainWindow* win, HWND hwnd) {
         win->DeleteToolTip();
         return TRUE;
     }
+    HideContextNoteActions(win);
     // The Edit PDF hover card and the text popup have the annotation's contents.
     // Do not put the old one-line comment tooltip on top of them.
     bool annotCardShown = win->pdfAnnotationsToolbarEnabled || IsAnnotationTextPopupShownFor(win, annot);
@@ -3542,7 +3544,7 @@ static void ZoomByMouseWheel(MainWindow* win, WPARAM wp) {
     StopSmoothScroll(win);
 
     short delta = GET_WHEEL_DELTA_WPARAM(wp);
-    Point pt = HwndGetCursorPos(win->hwndCanvas);
+    Point pt = HwndScreenToClient(win->hwndCanvas, UiCursorScreenPos());
     float newZoom;
     float factor = 0;
     // when ZoomIncrement is zero/negative, zoom must step through ZoomLevels (issue #5662)
@@ -3933,7 +3935,7 @@ static LRESULT CanvasOnMouseWheel(MainWindow* win, UINT msg, WPARAM wp, LPARAM l
     if (gSettings->fastScrollOverScrollbar) {
         // scroll faster if the cursor is over the scroll bar
         if (HwndIsCursorOverWindow(win->hwndCanvas)) {
-            Point pt = HwndGetCursorPos(win->hwndCanvas);
+            Point pt = HwndScreenToClient(win->hwndCanvas, UiCursorScreenPos());
             if (pt.x > win->canvasRc.dx) {
                 wp = (delta > 0) ? kSbHalfPageUp : kSbHalfPageDown;
                 SendMessageW(win->hwndCanvas, WM_VSCROLL, wp, 0);
@@ -4528,6 +4530,7 @@ static LRESULT WndProcCanvasFixedPageUI(MainWindow* win, HWND hwnd, UINT msg, WP
             return 0;
 
         case WM_MOUSELEAVE:
+            if (!ContextNoteActionsNear(win, HwndGetCursorPos(win->hwndCanvas))) HideContextNoteActions(win);
             win->annotationUnderCursor = nullptr;
             HideAnnotationHoverOverlay(win);
             ReadingBarOnMouseLeave(win);
@@ -4952,7 +4955,7 @@ static void OnTimer(MainWindow* win, HWND hwnd, WPARAM timerId) {
 
         case kSelectSmoothScrollTimerID:
             if (MouseAction::Selecting == win->mouseAction || MouseAction::SelectingText == win->mouseAction) {
-                pt = HwndGetCursorPos(win->hwndCanvas);
+                pt = HwndScreenToClient(win->hwndCanvas, UiCursorScreenPos());
                 if (NeedsSelectionEdgeAutoscroll(win, pt.x, pt.y)) {
                     OnMouseMove(win, pt.x, pt.y, MK_CONTROL);
                 }

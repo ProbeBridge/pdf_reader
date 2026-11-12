@@ -30,44 +30,76 @@ struct ContextNoteActions {
     MainWindow* win = nullptr;
     VirtHost* host = nullptr;
     Str id;
+    Point anchor;
     Func1List<MainWindow*> onWindowMoved;
 };
 
 static ContextNoteActions* gNoteActions = nullptr;
 
-struct NoteDeleteButton : VirtIconButton {
+struct NoteActionButton : VirtIconButton {
     Size GetIdealSize() override {
         int side = DpiScale(kNoteActionButtonSize);
         return {side, side};
     }
 };
 
-struct NoteDeleteTask {
+enum class NoteAction {
+    Speak,
+    Delete
+};
+
+struct NoteActionTask {
     MainWindow* win = nullptr;
     HWND frame = nullptr;
     Str id;
+    NoteAction action = NoteAction::Delete;
 };
 
-static void DeleteNoteTask(NoteDeleteTask* task) {
+static void RunNoteAction(NoteActionTask* task) {
     if (IsMainWindowValid(task->win) && task->win->hwndFrame == task->frame) {
-        ContextNoteDelete(task->win, task->id);
+        if (task->action == NoteAction::Speak) {
+            ContextNoteSpeak(task->win, task->id);
+        } else {
+            ContextNoteDelete(task->win, task->id);
+        }
     }
     str::Free(task->id);
     delete task;
 }
 
-static void DeleteClicked(ContextNoteActions* actions, VirtMouseEvent* ev) {
+static void QueueNoteAction(ContextNoteActions* actions, VirtMouseEvent* ev, NoteAction action) {
     if (actions != gNoteActions || !IsMainWindowValid(actions->win) || len(actions->id) == 0) {
         return;
     }
     ev->didHandle = true;
-    auto* task = new NoteDeleteTask();
+    auto* task = new NoteActionTask();
     task->win = actions->win;
     task->frame = actions->win->hwndFrame;
     task->id = str::Dup(actions->id);
-    HideContextNoteActions(actions->win);
-    // The host's click dispatch must finish before deletion can close a window.
-    uitask::Post(MkFunc0(DeleteNoteTask, task), "DeleteContextNote");
+    task->action = action;
+    if (action == NoteAction::Delete) {
+        HideContextNoteActions(actions->win);
+    }
+    // The host's click dispatch must finish before an action can relayout a window.
+    uitask::Post(MkFunc0(RunNoteAction, task), "ContextNoteAction");
+}
+
+static void DeleteClicked(ContextNoteActions* actions, VirtMouseEvent* ev) {
+    QueueNoteAction(actions, ev, NoteAction::Delete);
+}
+
+static void SpeakClicked(ContextNoteActions* actions, VirtMouseEvent* ev) {
+    QueueNoteAction(actions, ev, NoteAction::Speak);
+}
+
+static void ActionsMouseLeave(ContextNoteActions* actions) {
+    if (actions != gNoteActions || !IsMainWindowValid(actions->win)) {
+        return;
+    }
+    Point point = HwndScreenToClient(actions->win->hwndCanvas, UiCursorScreenPos());
+    if (!ContextNoteActionsNear(actions->win, point)) {
+        HideContextNoteActions(actions->win);
+    }
 }
 
 static void PaintActionBg(ContextNoteActions*, VirtHostPaintEvent* ev) {
@@ -114,10 +146,21 @@ static ContextNoteActions* EnsureActions(MainWindow* win) {
     }
     actions->host->onPaintBackground = MkFunc1(PaintActionBg, actions);
     actions->host->onNativeMsg = MkFunc1(ActionNativeMessage, actions);
+    actions->host->onMouseLeave = MkFunc0(ActionsMouseLeave, actions);
     actions->onWindowMoved = MkFunc1Void(HideContextNoteActions);
     win->RegisterOnWindowMoved(&actions->onWindowMoved);
     gNoteActions = actions;
     return actions;
+}
+
+static NoteActionButton* NewNoteActionButton(Str svg, Str tooltip, Func1<VirtMouseEvent*> onClick) {
+    auto* button = new NoteActionButton();
+    int icon = DpiScale(kNoteActionIconSize);
+    button->pixmap = GetCachedPixmapForSvg(svg, icon, icon, ThemeWindowTextColor(), ThemeWindowBackgroundColor());
+    button->SetColor(kColIconBtnBgHover, ThemeWindowControlBackgroundColor());
+    button->SetTooltip(tooltip);
+    button->onClick = onClick;
+    return button;
 }
 
 void ShowContextNoteActions(MainWindow* win, Str id, Point canvasPoint) {
@@ -129,19 +172,22 @@ void ShowContextNoteActions(MainWindow* win, Str id, Point canvasPoint) {
     if (!actions) {
         return;
     }
+    if (actions->host->IsVisible() && str::Eq(actions->id, id)) {
+        return;
+    }
     str::ReplaceWithCopy(&actions->id, id);
-    auto* button = new NoteDeleteButton();
-    int icon = DpiScale(kNoteActionIconSize);
-    button->pixmap =
-        GetCachedPixmapForSvg(Str(gIconTrash), icon, icon, ThemeWindowTextColor(), ThemeWindowBackgroundColor());
-    button->SetColor(kColIconBtnBgHover, ThemeWindowControlBackgroundColor());
-    button->SetTooltip(PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? StrL("删除注释")
-                                                                                 : StrL("Delete note"));
-    button->onClick = MkFunc1(DeleteClicked, actions);
+    bool chinese = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE;
+    auto* row = new HBox();
+    row->gap = DpiScale(kNoteActionPadding);
+    row->AddChild(NewNoteActionButton(Str(gIconSpeak), chinese ? StrL("朗读原文") : StrL("Read original text"),
+                                      MkFunc1(SpeakClicked, actions)));
+    row->AddChild(NewNoteActionButton(Str(gIconTrash), chinese ? StrL("删除注释") : StrL("Delete note"),
+                                      MkFunc1(DeleteClicked, actions)));
     int padding = DpiScale(kNoteActionPadding);
-    Size size = actions->host->SetLayoutSizedToContent(new Padding(button, Insets{padding, padding, padding, padding}));
+    Size size = actions->host->SetLayoutSizedToContent(new Padding(row, Insets{padding, padding, padding, padding}));
 
     Point anchor = HwndClientToScreen(win->hwndCanvas, canvasPoint);
+    actions->anchor = anchor;
     Rect canvas = HwndClientRect(win->hwndCanvas);
     int x = limitValue(canvasPoint.x - size.dx / 2, 0, std::max(0, canvas.dx - size.dx));
     Point at = HwndClientToScreen(win->hwndCanvas, Point(x, canvasPoint.y));
@@ -156,6 +202,17 @@ void ShowContextNoteActions(MainWindow* win, Str id, Point canvasPoint) {
     actions->host->SetPos(placed, true);
     actions->host->ClipToRoundedRect(kNoteActionRadius, size);
     actions->host->Repaint();
+}
+
+bool ContextNoteActionsNear(MainWindow* win, Point canvasPoint) {
+    ContextNoteActions* actions = gNoteActions;
+    if (!actions || actions->win != win || !actions->host->IsVisible()) {
+        return false;
+    }
+    Rect corridor = actions->host->ScreenRect().Union(Rect(actions->anchor, Size(1, 1)));
+    int padding = DpiScale(kNoteActionPadding);
+    corridor.Inflate(padding, padding);
+    return corridor.Contains(HwndClientToScreen(win->hwndCanvas, canvasPoint));
 }
 
 void HideContextNoteActions(MainWindow* win) {
@@ -177,4 +234,8 @@ void DestroyContextNoteActions(MainWindow* win) {
     str::Free(actions->id);
     delete actions->host;
     delete actions;
+}
+
+TempStr ContextNoteActionIdTemp(MainWindow* win) {
+    return gNoteActions && gNoteActions->win == win ? str::DupTemp(gNoteActions->id) : TempStr{};
 }

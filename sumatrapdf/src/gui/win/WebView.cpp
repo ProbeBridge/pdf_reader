@@ -1966,6 +1966,7 @@ static void OnSharedEnvironmentReady(HRESULT res, ICoreWebView2Environment* env)
 static Microsoft::WRL::ComPtr<CoreWebView2EnvironmentOptions> CreateOfflineEnvironmentOptions() {
     auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
     options->put_AdditionalBrowserArguments(
+        L"--autoplay-policy=no-user-gesture-required "
         L"--disable-background-networking "
         L"--disable-component-update "
         L"--disable-component-extensions-with-background-pages "

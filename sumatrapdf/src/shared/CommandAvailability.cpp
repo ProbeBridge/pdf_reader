@@ -662,13 +662,9 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
     }
 
     if (cmdId == CmdToggleDocumentReflow) {
-#if defined(SUMATRA_NG)
-        return CommandVisibility::Hide;
-#else
         return ctx.isFixedPage && ctx.engineKind == kindEngineMupdf && !ctx.isReflowable && !ctx.isImageCollection
                    ? CommandVisibility::Show
                    : CommandVisibility::Hide;
-#endif
     }
 
     // a Shortcuts / toolbar entry is a clone with its own id, so it's the

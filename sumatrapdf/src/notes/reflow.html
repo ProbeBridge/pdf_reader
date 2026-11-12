@@ -22,9 +22,21 @@
     </nav>
     <p id="status" role="status"></p>
     <main id="pages"></main>
-    <div id="note-actions" hidden>
-      <span id="note-ipa"></span><button id="focus-note" type="button">查看注释</button
-      ><button id="delete-note" type="button">删除</button>
+    <div id="note-actions" role="toolbar" aria-label="注释操作" hidden>
+      <span id="note-ipa"></span
+      ><button id="speak-note" class="note-action-icon" type="button" title="朗读原文" aria-label="朗读原文">
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 7.6h2.9L10 4.2v11.6l-4.1-3.4H3zM13.2 7.3a3.8 3.8 0 0 1 0 5.4M15.6 4.9a7.2 7.2 0 0 1 0 10.2" />
+        </svg></button
+      ><button id="focus-note" type="button">查看注释</button><button id="delete-note" type="button">删除</button>
     </div>
   </body>
 </html>

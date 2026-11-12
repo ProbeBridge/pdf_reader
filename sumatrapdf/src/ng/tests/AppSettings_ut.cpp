@@ -52,6 +52,7 @@ void AppSettingsTest() {
         "\t[\n"
         "\t\tFilePath = C:\\doc.pdf\n"
         "\t\tPageNo = 3\n"
+        "\t\tLastOpened = 1794484800000\n"
         "\t\tMeasurementScale = 2.5\n"
         "\t\tMeasurementUnit = mm\n"
         "\t]\n"
@@ -59,6 +60,7 @@ void AppSettingsTest() {
     loaded = NewSettings(withFile);
     utassert(loaded != nullptr);
     out = SerializeSettings(loaded, withFile, SerializeOpt::All);
+    utassert(str::Contains(out, StrL("LastOpened = 1794484800000")));
     utassert(str::Contains(out, StrL("MeasurementScale = 2.5")));
     utassert(str::Contains(out, StrL("MeasurementUnit = mm")));
     str::Free(out);

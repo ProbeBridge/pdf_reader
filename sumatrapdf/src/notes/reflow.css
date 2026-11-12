@@ -236,6 +236,9 @@ main {
   padding: 0;
 }
 #note-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   position: fixed;
   z-index: 3;
   max-width: calc(100vw - 16px);
@@ -252,4 +255,19 @@ main {
 #note-ipa {
   display: inline-block;
   padding-inline: 4px;
+}
+
+#note-actions .note-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 4px;
+  flex: 0 0 auto;
+}
+.note-action-icon svg {
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
 }

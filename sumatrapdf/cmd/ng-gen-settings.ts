@@ -1175,6 +1175,7 @@ const fileEBookUI: Field[] = [
 
 const fileState: Field[] = [
   field("FilePath", Str, null, "path of the document"),
+  field("LastOpened", Str, null, "last opened time as Unix milliseconds"),
   array("Favorites", favorite, "pages of this document bookmarked in the Favorites menu"),
   field(
     "IsPinned",
@@ -1354,6 +1355,7 @@ const fileStateLayout = [
   "Thumbnail",
   "Himl",
   "FilePath",
+  "LastOpened",
   "DecryptionKey",
   "SidebarView",
   "DisplayMode",
@@ -2251,6 +2253,14 @@ const globalPrefs: Field[] = [
   )
     .internal()
     .ver("3.7"),
+  field(
+    "ContextNotesWidth",
+    Int,
+    0,
+    "width of the AI annotation sidebar in 96-DPI pixels (0 = automatic); saved when its divider is dragged",
+  )
+    .internal()
+    .ver("3.7"),
   emptyLine(),
   field(
     "TranslateToLang",
@@ -2478,6 +2488,7 @@ const globalPrefsLayout = [
   "ZoomIncrement",
   "FitWidthPercent",
   "AIChatSidebarDx",
+  "ContextNotesWidth",
   "CustomScreenDPI",
   "WindowState",
   "OpenCountWeek",

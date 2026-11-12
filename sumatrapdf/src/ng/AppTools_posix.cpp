@@ -62,20 +62,20 @@ static TempStr DefaultAppDataDirTemp() {
 #if OS_DARWIN
     if (home && *home) {
         TempStr dir = path::JoinTemp(Str((char*)home), StrL("Library/Application Support"));
-        return path::JoinTemp(dir, StrL(kAppName));
+        return path::JoinTemp(dir, StrL("SumatraPDF-AI"));
     }
 #else
     const char* xdg = getenv("XDG_CONFIG_HOME");
     if (xdg && *xdg) {
-        return path::JoinTemp(Str((char*)xdg), StrL(kAppName));
+        return path::JoinTemp(Str((char*)xdg), StrL("SumatraPDF-AI"));
     }
     if (home && *home) {
         TempStr dir = path::JoinTemp(Str((char*)home), StrL(".config"));
-        return path::JoinTemp(dir, StrL(kAppName));
+        return path::JoinTemp(dir, StrL("SumatraPDF-AI"));
     }
 #endif
     const char* tmp = getenv("TMPDIR");
-    return path::JoinTemp(Str((char*)(tmp && *tmp ? tmp : "/tmp")), StrL(kAppName));
+    return path::JoinTemp(Str((char*)(tmp && *tmp ? tmp : "/tmp")), StrL("SumatraPDF-AI"));
 #endif
 }
 
