@@ -701,8 +701,7 @@ void LoadTocTree(MainWindow* win) {
     }
 }
 
-// TreeView items inserted while the sidebar is hidden or 0-sized stay blank
-// until the native control is rebuilt at a real size (resize used to unstick it).
+// Showing a previously hidden tree needs a fresh paint, not new native items.
 void RefreshTocTreeIfNeeded(MainWindow* win) {
     if (!win || !win->tocLoaded || !win->tocTreeView) {
         return;
@@ -715,7 +714,7 @@ void RefreshTocTreeIfNeeded(MainWindow* win) {
     if (!p || HwndClientRect(p->hwnd).IsEmpty() || !HwndIsVisible(p->hwnd)) {
         return;
     }
-    win->tocTreeView->SetTreeModel(tab->currToc);
+    RedrawWindow(win->tocTreeView->hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME);
 }
 
 // The controller swapped in a different TocTree (the markdown / html TOC is
@@ -1256,6 +1255,7 @@ struct TocFontLayout {
     bool committing = false;
     int paintHold = 0;
     int measured = 0;
+    int rebuilds = 0;
     HFONT nativeFont = nullptr;
     DWORD changedAt = 0;
     double maxSliceMs = 0;
@@ -1381,6 +1381,16 @@ static void StartTocFontLayout(TreeView* tree) {
     SetTimer(tree->hwnd, kTocFontTimer, layout->next ? USER_TIMER_MINIMUM : kTocFontPollMs, nullptr);
 }
 
+static void RemeasureTocTree(TreeView* tree) {
+    if (HwndClientRect(tree->hwnd).IsEmpty() || !TreeView_GetRoot(tree->hwnd)) return;
+    auto* layout = GetTocFontLayout(tree->hwnd);
+    bool commitPending = layout->commitPending || layout->dirty;
+    // Initial load and width changes use the same visible-first, sliced pass.
+    // Their native font is unchanged, so no full font scan is needed at idle.
+    StartTocFontLayout(tree);
+    layout->commitPending = commitPending;
+}
+
 static bool TocHasStyledFont(TocItem* item) {
     for (; item; item = item->next) {
         if (item->fontFlags != 0 || TocHasStyledFont(item->child)) return true;
@@ -1476,7 +1486,11 @@ static void ContinueTocFontLayout(TreeView* tree) {
         if (TimeSinceInMs(start) >= kTocFontBatchMs) break;
     }
     if (!layout->next) {
-        SetTimer(tree->hwnd, kTocFontTimer, kTocFontPollMs, nullptr);
+        if (layout->commitPending) {
+            SetTimer(tree->hwnd, kTocFontTimer, kTocFontPollMs, nullptr);
+        } else {
+            KillTimer(tree->hwnd, kTocFontTimer);
+        }
     }
     if (batchRedraw) tree->ResumeRedraw();
     gTocMeasureHwnd = previous;
@@ -1577,6 +1591,7 @@ static LRESULT CALLBACK WndProcTocZoom(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                 delete layout;
             }
         } else if (msg == TVM_DELETEITEM) {
+            if ((HTREEITEM)lp == TVI_ROOT) GetTocFontLayout(hwnd)->rebuilds++;
             // Cancel before handles or their model items become invalid.
             CancelTocFontLayout(hwnd);
         } else if (msg == WM_SETFONT && TreeView_GetCount(hwnd) == 0) {
@@ -1592,7 +1607,7 @@ static LRESULT CALLBACK WndProcTocZoom(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             HwndSetFont(tree->GetToolTipsHwnd(), (HFONT)wp);
             if (lp) HwndInvalidate(hwnd, false);
             return 0;
-        } else if (msg == TVM_SETITEMHEIGHT || msg == TVM_INSERTITEMW || msg == TVM_SETITEMW) {
+        } else if (msg == TVM_SETITEMHEIGHT || msg == TVM_INSERTITEMW || msg == TVM_SETITEMW || msg == WM_SETREDRAW) {
             HWND previous = gTocMeasureHwnd;
             gTocMeasureHwnd = hwnd;
             LRESULT result = DefSubclassProc(hwnd, msg, wp, lp);
@@ -1695,11 +1710,11 @@ TempStr TocRowsResultTemp(int* exitCodeOut) {
     auto* layout = FindTocFontLayout(hwnd);
     out.Append(
         fmt("OK rowDy=%d width=%d wrap=%d labelDx=%d fontPending=%d fontSliceMs=%.2f fontCommitMs=%.2f fontIdleMs=%lu "
-            "fontMeasured=%d fontWorkPending=%d\n",
+            "fontMeasured=%d fontWorkPending=%d rebuilds=%d\n",
             TreeView_GetItemHeight(hwnd), width, tv->wrapText ? 1 : 0, (int)(label.right - label.left),
             layout && (layout->next || layout->dirty || layout->commitPending), layout ? layout->maxSliceMs : 0,
             layout ? layout->commitMs : 0, layout ? layout->idleMs : 0, layout ? layout->measured : 0,
-            layout && layout->next));
+            layout && layout->next, layout ? layout->rebuilds : 0));
     for (HTREEITEM h = TreeView_GetFirstVisible(hwnd); h; h = TreeView_GetNextVisible(hwnd, h)) {
         RECT rc{};
         TreeView_GetItemRect(hwnd, h, &rc, FALSE);
@@ -1743,6 +1758,7 @@ void CreateToc(MainWindow* win) {
     treeView->onKeyDown = MkFunc1Void(TocTreeKeyDown);
     treeView->onGetTooltip = MkFunc1Void(TocCustomizeTooltip);
     treeView->onClick = MkFunc1Void(TocTreeClick);
+    treeView->onRemeasure = MkFunc0(RemeasureTocTree, treeView);
 
     treeView->Create(args);
     SendMessageW(treeView->hwnd, CCM_SETVERSION, 5, 0);

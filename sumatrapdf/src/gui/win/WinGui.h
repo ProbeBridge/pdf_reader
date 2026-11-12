@@ -1107,6 +1107,7 @@ struct TreeView : ControlBase {
     // items are several rows tall (TVS_NONEVENHEIGHT), as onMeasureLines says
     bool wrapText = false;
     MeasureLinesHandler onMeasureLines;
+    Func0 onRemeasure;
 
     // private
     TVITEMW item{};

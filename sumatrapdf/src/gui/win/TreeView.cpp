@@ -428,7 +428,7 @@ static HTREEITEM insertItemFront(TreeView* treeView, TreeItem ti, HTREEITEM pare
         tvitem->mask |= TVIF_CHILDREN;
         tvitem->cChildren = 1;
     }
-    if (treeView->wrapText) {
+    if (treeView->wrapText && !treeView->onRemeasure.IsValid()) {
         int depth = parent ? ItemDepth(treeView->hwnd, parent) + 1 : 0;
         tvitem->mask |= TVIF_INTEGRAL;
         tvitem->iIntegral = treeView->ItemLines(ti, depth);
@@ -460,6 +460,10 @@ static void RemeasureSiblings(TreeView* tv, HTREEITEM first, int depth) {
 // tree measures the rest when they're inserted)
 void TreeView::RemeasureItems() {
     if (!wrapText || !hwnd) {
+        return;
+    }
+    if (onRemeasure.IsValid()) {
+        onRemeasure.Call();
         return;
     }
     RemeasureSiblings(this, TreeView_GetRoot(hwnd), 0);
@@ -509,6 +513,7 @@ static void PopulateTreeItem(TreeView* treeView, TreeItem item, HTREEITEM parent
 void TreeView::EnsureChildrenPopulated(TreeItem item, HTREEITEM h) {
     if (lazyChildren && h && !TreeView_GetChild(hwnd, h) && treeModel->ChildCount(item) > 0) {
         PopulateTreeItem(this, item, h);
+        if (onRemeasure.IsValid()) RemeasureItems();
     }
 }
 

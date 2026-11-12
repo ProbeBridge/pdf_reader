@@ -76,6 +76,7 @@ struct TreeModelItems {
         struct Frame {
             TreeItem item;
             int nextChild;
+            int childCount;
         };
         Vec<Frame> stack;
 

@@ -23,10 +23,11 @@ TreeItem TreeModelItems::iterator::operator*() const {
 // pre-order: the current item's first child, else the next sibling of the
 // nearest ancestor that still has one
 TreeModelItems::iterator& TreeModelItems::iterator::operator++() {
-    VecAppend(stack, {curr, 0});
+    // ChildCount may walk a linked list; count once per parent.
+    VecAppend(stack, {curr, 0, tm->ChildCount(curr)});
     while (len(stack) > 0) {
         Frame& f = stack[len(stack) - 1];
-        if (f.nextChild < tm->ChildCount(f.item)) {
+        if (f.nextChild < f.childCount) {
             curr = tm->ChildAt(f.item, f.nextChild++);
             return *this;
         }

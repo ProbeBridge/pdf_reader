@@ -26,6 +26,8 @@
 
 目录缩放先更新可见条目，长标题换行分批测量；原生字体及完整滚动范围在鼠标键盘空闲后同步，保留选中项、展开状态和正文位置。
 
+启动和切回目录标签时复用已有条目，保留目录搜索结果，避免重复创建整份目录。
+
 | 快捷键                           | 操作               |
 | -------------------------------- | ------------------ |
 | `Alt+Shift+A`                    | 为选中文字生成注释 |
@@ -90,6 +92,7 @@ npm run test:home         # 旧历史封面与启动回归
 npx bun tests/toc-zoom.ts      # 目录缩放与设置保留
 npx bun tests/toc-zoom-perf.ts # 6000 项目录的缩放响应、滚动范围和筛选
 npx bun tests/toc-font-render.ts # 目录缩放及横向滚动后的文字背景
+npx bun tests/toc-activation-perf.ts --restore # 启动恢复和目录标签切换性能、绘制及搜索状态
 npx bun tests/notes-width.ts   # 右侧注释栏宽度
 npx bun tests/reflow-native.ts # 原生重排、表格图片与注释
 ```
