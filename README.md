@@ -62,13 +62,13 @@ npm run build:mac
 npm run install:mac -- --launch
 ```
 
-应用安装到 `~/Applications/SumatraPDF AI.app`，Finder 的「打开方式」可选择它。升级前退出应用，再运行相同的安装命令；升级保留数据。调试构建使用 `npm run build:mac -- --debug`。
+应用安装到所有账户可见的 `/Applications/SumatraPDF AI.app`，需要对 `/Applications` 有写入权限，Finder 的「打开方式」可选择它。升级前退出应用，再运行相同的安装命令；升级保留数据，并迁移当前账户旧的 `~/Applications` 安装副本。调试构建使用 `npm run build:mac -- --debug`。
 
 macOS 使用 WKWebView 承载现有网页层，支持选字和单击注释、原文高亮、重排、阅读历史及目录字号。目录顶部的 `−` / 百分比 / `+` 调整字号，也支持目录内按住 Control 或 Command 滚轮缩放。Windows 默认快捷键中的 Control 在 Mac 主窗口通常对应 Command；注释和重排网页内两者均可使用。朗读优先使用本地 Kokoro，失败时使用系统语音。
 
 设置与加密注释保存在 `~/Library/Application Support/SumatraPDF-AI`，与官方 ng 隔离。注释文件使用 AES-256-CBC 加 HMAC-SHA256，随机密钥保存在当前用户的 macOS 钥匙串。Windows 继续使用 DPAPI。跨系统迁移通过界面导出、导入 JSON，不复制加密文件；导出文件不含 API Key。
 
-Mac 构建包位于 `sumatrapdf/out/mac/rel/.bundle.noindex/SumatraPDF AI.app`，开发副本不参与应用搜索；安装版固定保留在 `~/Applications/SumatraPDF AI.app`。使用本地 ad-hoc 签名，未做公开分发所需的 Developer ID 签名与公证。
+Mac 构建包位于 `sumatrapdf/out/mac/rel/.bundle.noindex/SumatraPDF AI.app`，开发副本不参与应用搜索；安装版固定保留在 `/Applications/SumatraPDF AI.app`。使用本地 ad-hoc 签名，未做公开分发所需的 Developer ID 签名与公证。
 
 ### Windows
 

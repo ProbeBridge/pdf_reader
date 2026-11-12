@@ -94,7 +94,7 @@ ng 目前没有任何 AI 版功能。
 
 - 安装 Xcode 命令行工具、bun、Node.js 24 或更新版本。
 - 在仓库根目录运行 `npm ci` 和 `npm run vendor:kokoro`。下载脚本只用 Node，mac 上应该能直接运行。
-- 构建 ng：`cd sumatrapdf && bun cmd/ng-build.ts -dbg`，产物是 `out/mac/dbg/SumatraPDF` 和 `out/mac/dbg/.bundle.noindex/SumatraPDF AI.app`。构建包放在隐藏且不索引的目录中，应用搜索只保留 `~/Applications` 中的安装版。
+- 构建 ng：`cd sumatrapdf && bun cmd/ng-build.ts -dbg`，产物是 `out/mac/dbg/SumatraPDF` 和 `out/mac/dbg/.bundle.noindex/SumatraPDF AI.app`。构建包放在隐藏且不索引的目录中，应用搜索只保留 `/Applications` 中所有账户可见的安装版。
 - 运行：`out/mac/dbg/SumatraPDF -for-testing -log-to-file <日志路径> <pdf>`。加 `-for-testing` 时不恢复会话，也不保存设置。
 - mac 上的调试和自动化方法见 `.claude/skills/verify-mac/`。
 
