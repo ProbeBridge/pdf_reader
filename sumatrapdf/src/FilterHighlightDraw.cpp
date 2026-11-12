@@ -137,7 +137,8 @@ void DrawMaybeHighlightedText(Gfx* gfx, Rect rc, Str text, const StrVec& filterW
     gfx->DrawText(text, rc, drawFlags, font, colText);
 }
 
-// Sample the row background the TreeView already painted (indent/icon strip).
+// Sample the top padding. After horizontal scrolling, the row's center can
+// contain text even in the indent strip; glyph ink is not a background color.
 // Falls back to kColorUnset if GetPixel fails.
 static Color SamplePaintedRowBackground(HDC hdc, Rect itemRc) {
     if (itemRc.IsEmpty()) {
@@ -147,7 +148,7 @@ static Color SamplePaintedRowBackground(HDC hdc, Rect itemRc) {
     if (x >= itemRc.x + itemRc.dx) {
         x = itemRc.x;
     }
-    int y = itemRc.y + (itemRc.dy / 2);
+    int y = itemRc.y + (itemRc.dy > 1 ? 1 : 0);
     Color c = GetPixel(hdc, x, y);
     if (c == CLR_INVALID) {
         return kColorUnset;

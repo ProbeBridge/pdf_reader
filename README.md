@@ -89,6 +89,7 @@ npm run test:perf         # 原生性能
 npm run test:home         # 旧历史封面与启动回归
 npx bun tests/toc-zoom.ts      # 目录缩放与设置保留
 npx bun tests/toc-zoom-perf.ts # 6000 项目录的缩放响应、滚动范围和筛选
+npx bun tests/toc-font-render.ts # 目录缩放及横向滚动后的文字背景
 npx bun tests/notes-width.ts   # 右侧注释栏宽度
 npx bun tests/reflow-native.ts # 原生重排、表格图片与注释
 ```
