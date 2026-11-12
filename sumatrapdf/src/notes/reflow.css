@@ -1,5 +1,5 @@
+@import url("theme.css");
 :root {
-  color-scheme: light dark;
   --font-scale: 1;
 }
 * {
@@ -231,8 +231,8 @@ main {
 .note-ink {
   position: absolute;
   display: block;
-  background: #ffdb70;
-  border-bottom: 1px solid #995400;
+  background: var(--highlight);
+  border-bottom: 1px solid var(--accent);
   padding: 0;
 }
 #note-actions {

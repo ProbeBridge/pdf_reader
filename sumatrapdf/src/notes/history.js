@@ -1,7 +1,30 @@
 import { native, node, button, text, toast, showError, zh } from "./bridge.js";
 import { dayKey, historyGroups } from "./history-model.js";
+import { createReadingStats } from "./reading-stats.js";
 const $ = (s) => document.querySelector(s);
 let entries = [];
+let statsVisible = false;
+const statsView = createReadingStats($("#stats-panel"));
+function showStats(visible) {
+  statsVisible = visible;
+  $("aside h1").textContent = visible ? text("阅读统计", "Reading statistics") : text("阅读历史", "Reading history");
+  $("aside p").textContent = visible
+    ? text("记录每天的阅读与生词积累", "Daily reading and vocabulary")
+    : text("按时间浏览读过的文档", "Documents you have opened");
+  $("#history-panel").hidden = visible;
+  $("#stats-panel").hidden = !visible;
+  $(".search").hidden = visible;
+  $("#statistics").textContent = visible ? text("阅读历史", "Reading history") : text("阅读统计", "Statistics");
+  for (const [id, selected] of [
+    ["statistics", visible],
+    ["stats-tab", visible],
+    ["history-tab", !visible],
+  ]) {
+    $("#" + id).setAttribute("aria-pressed", String(selected));
+    if (id !== "statistics") $("#" + id).classList.toggle("selected", selected);
+  }
+  if (visible) statsView.refresh();
+}
 let refreshNeeded = false,
   refreshPromise;
 const dateFormat = new Intl.DateTimeFormat(navigator.language, {
@@ -18,7 +41,9 @@ const dateFormat = new Intl.DateTimeFormat(navigator.language, {
 if (!zh) {
   $("h1").textContent = $("#heading").textContent = "Reading history";
   $("aside p").textContent = "Documents you have opened";
-  $(".selected").textContent = "◷　Reading history";
+  $("#history-tab").textContent = "◷　Reading history";
+  $("#stats-tab").textContent = "▥　Statistics";
+  $("#statistics").textContent = "Statistics";
   $(".aside-hint").textContent = "Stored on this computer. Removing a record keeps the file.";
   $("#search").placeholder = "Search reading history";
   $("#open").textContent = "Open file";
@@ -104,7 +129,11 @@ function refresh() {
 $("#search").addEventListener("input", render);
 $("#open").addEventListener("click", () => native("openPicker").catch(showError));
 $("#notes").addEventListener("click", () => native("showNotes").catch(showError));
+$("#statistics").addEventListener("click", () => showStats(!statsVisible));
+$("#history-tab").addEventListener("click", () => showStats(false));
+$("#stats-tab").addEventListener("click", () => showStats(true));
 document.addEventListener("keydown", (e) => {
+  if (statsVisible) return;
   if (((e.ctrlKey || e.metaKey) && ["f", "h"].includes(e.key.toLowerCase())) || e.key === "/") {
     e.preventDefault();
     $("#search").focus();

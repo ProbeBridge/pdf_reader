@@ -367,6 +367,12 @@ function setup_base_pch()
     enablepch "Off"
   filter { "files:src/shared/AIChatCommon.cpp" }
     enablepch "Off"
+  filter { "files:src/shared/ContextNotesCommon.cpp" }
+    enablepch "Off"
+  filter { "files:src/shared/ContextNotesNetworkCommon.cpp" }
+    enablepch "Off"
+  filter { "files:src/shared/ReflowDocumentCommon.cpp" }
+    enablepch "Off"
   filter { "files:src/shared/ReadingBar.cpp" }
     enablepch "Off"
   filter { "files:src/shared/Selection.cpp" }

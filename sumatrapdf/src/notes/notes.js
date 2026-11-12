@@ -379,6 +379,13 @@ async function runJob(key, p, a, turn = null) {
   try {
     const modelSettings = await getSettings();
     await withLock(() => persist(key, p));
+    if (!turn && a._statsPending === true) {
+      await native("recordVocabulary", { id: a.id, createdAt: a.createdAt })
+        .then(() => {
+          a._statsPending = false;
+        })
+        .catch(showError);
+    }
     if (ctrl.signal.aborted || !targetExists(p, a, turn)) return;
     const args = {
       settings: modelSettings,
@@ -443,6 +450,7 @@ async function annotate(selection) {
     context: selection.context,
     anchor: { ranges },
     createdAt: stamp(),
+    _statsPending: true,
     status: "pending",
     note: "",
     ipa: "",

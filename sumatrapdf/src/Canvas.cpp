@@ -24,6 +24,7 @@
 #include "gui/PlatformFont.h"
 #include "gui/win/WinGui.h"
 #include "gui/VirtCtrl.h"
+#include "gui/VirtHost.h"
 
 #include "Settings.h"
 #include "DisplayMode.h"
@@ -77,6 +78,7 @@
 #include "PageGridDialogCommon.h"
 #include "MeasurementToolbar.h"
 #include "ContextNotes.h"
+#include "ContextNoteOverlay.h"
 #include "ReflowDocument.h"
 #include "SumatraLog.h"
 

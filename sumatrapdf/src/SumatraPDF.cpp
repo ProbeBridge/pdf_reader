@@ -3150,6 +3150,7 @@ void UpdateAfterThemeChange() {
         RefreshAnnotEditToolbar(win);
         RefreshAnnotationHoverOverlay(win);
         UpdateAIChatTheme(win);
+        ContextNotesUpdateTheme(win);
         DarkModeApplyToFrameAfterThemeChange(win);
         UpdateWindowFrameBorderColor(win);
         // TODO: this only rerenders canvas, not frame, even with

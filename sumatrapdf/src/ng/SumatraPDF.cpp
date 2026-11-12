@@ -251,6 +251,7 @@ void UpdateAfterThemeChange() {
     for (MainWindow* win : gWindows) {
         RebuildMenuBar(win);
         UpdateToolbarAfterThemeChange(win);
+        ContextNotesUpdateTheme(win);
         win->RedrawAll(true);
     }
     UpdateDocumentColors();

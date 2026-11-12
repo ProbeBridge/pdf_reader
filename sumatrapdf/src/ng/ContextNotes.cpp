@@ -29,6 +29,9 @@ HWND NotesFrame(MainWindow* win) {
 HWND NotesCanvas(MainWindow* win) {
     return NotesFrame(win);
 }
+bool NotesReadingActive(MainWindow* win) {
+    return win->gpuiWin && win->gpuiWin->active && !win->gpuiWin->minimized;
+}
 void NotesRelayout(MainWindow* win) {
     AppShellSyncCanvasSize(win);
     AppShellInvalidate(win);

@@ -1676,8 +1676,12 @@
     <ClCompile Include="..\src\ChangeThemeDialog.cpp" />
     <ClCompile Include="..\src\CommandPalette.cpp" />
     <ClCompile Include="..\src\ContextNoteOverlay.cpp" />
-    <ClCompile Include="..\src\shared\ContextNotesCommon.cpp" />
-    <ClCompile Include="..\src\shared\ContextNotesNetworkCommon.cpp" />
+    <ClCompile Include="..\src\shared\ContextNotesCommon.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\src\shared\ContextNotesNetworkCommon.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\src\CustomZoomDialog.cpp" />
     <ClCompile Include="..\src\DarkMode.cpp" />
     <ClCompile Include="..\src\DocumentProperties.cpp" />
@@ -1719,7 +1723,9 @@
     <ClCompile Include="..\src\RefHover.cpp" />
     <ClCompile Include="..\src\RefHoverCanvas.cpp" />
     <ClCompile Include="..\src\RefHoverPopup.cpp" />
-    <ClCompile Include="..\src\shared\ReflowDocumentCommon.cpp" />
+    <ClCompile Include="..\src\shared\ReflowDocumentCommon.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\src\RegistryPreview.cpp" />
     <ClCompile Include="..\src\RegistrySearchFilter.cpp" />
     <ClCompile Include="..\src\Screenshot.cpp" />

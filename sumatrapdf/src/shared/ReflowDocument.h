@@ -11,6 +11,7 @@ bool ReflowDocumentHandleCommand(MainWindow*, int cmdId);
 bool ReflowDocumentZoomBy(MainWindow*, float factor);
 int ReflowDocumentZoom(MainWindow*);
 void ReflowDocumentUpdateNotes(MainWindow*);
+void ReflowDocumentUpdateTheme(MainWindow*);
 bool ReflowDocumentGoToNote(MainWindow*, Str id);
 
 // ContextNotes owns the document identity and notes store. The reflow content

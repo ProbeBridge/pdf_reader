@@ -9,6 +9,9 @@ inline HWND NotesFrame(MainWindow* win) {
 inline HWND NotesCanvas(MainWindow* win) {
     return win->hwndCanvas;
 }
+inline bool NotesReadingActive(MainWindow* win) {
+    return GetForegroundWindow() == win->hwndFrame && !IsIconic(win->hwndFrame);
+}
 inline void NotesRelayout(MainWindow* win) {
     win->uiState.layout = {};
 }

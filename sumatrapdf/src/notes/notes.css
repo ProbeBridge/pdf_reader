@@ -1,10 +1,11 @@
+@import url("theme.css");
 :root {
   font:
     15px/1.6 "Segoe UI",
     "Microsoft YaHei",
     sans-serif;
-  color: #111;
-  background: white;
+  color: var(--text);
+  background: var(--surface);
   --scale: 1;
 }
 * {
@@ -21,31 +22,31 @@ select {
   color: inherit;
 }
 button {
-  background: white;
-  border: 1px solid #888;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 4px 9px;
   cursor: pointer;
 }
 button:hover,
 button:focus-visible {
-  background: #fff2c6;
-  border-color: #222;
+  background: var(--hover);
+  border-color: var(--text);
 }
 button:disabled {
   cursor: default;
-  color: #666;
+  color: var(--muted);
 }
 header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 10px 12px;
-  border-bottom: 2px solid #222;
+  border-bottom: 2px solid var(--text);
   position: sticky;
   top: 0;
   z-index: 3;
-  background: white;
+  background: var(--surface);
   gap: 5px;
 }
 nav {
@@ -57,7 +58,7 @@ nav button {
 }
 .doc-title {
   padding: 7px 12px;
-  border-bottom: 1px solid #aaa;
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -71,7 +72,7 @@ nav button {
 }
 .card {
   position: relative;
-  border-bottom: 1px solid #aaa;
+  border-bottom: 1px solid var(--border);
   padding: 14px 0;
   scroll-margin-top: 100px;
 }
@@ -84,8 +85,8 @@ nav button {
   left: 0;
   z-index: 2;
   visibility: hidden;
-  background: white;
-  border: 1px solid #777;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 2px;
   margin: 0;
@@ -145,7 +146,7 @@ nav button {
   }
 }
 .card.active {
-  border-left: 3px solid #a65300;
+  border-left: 3px solid var(--accent);
   padding-left: 9px;
 }
 .card-head {
@@ -202,7 +203,7 @@ nav button {
 .model,
 .muted {
   font-size: 12px;
-  color: #555;
+  color: var(--muted);
 }
 .model {
   display: block;
@@ -238,7 +239,7 @@ nav button {
   resize: vertical;
   min-height: 58px;
   padding: 6px;
-  border: 1px solid #555;
+  border: 1px solid var(--muted);
 }
 .ask-actions {
   display: flex;
@@ -247,7 +248,7 @@ nav button {
   margin: 5px 0;
 }
 .turn {
-  border-left: 2px solid #888;
+  border-left: 2px solid var(--border-strong);
   padding-left: 10px;
   margin: 12px 0;
 }
@@ -256,7 +257,7 @@ nav button {
   white-space: pre-wrap;
 }
 .error {
-  color: #8d170d;
+  color: var(--error);
   white-space: pre-wrap;
 }
 .pending {
@@ -268,17 +269,17 @@ nav button {
   max-width: 420px;
 }
 .empty p {
-  color: #444;
+  color: var(--muted);
   font-size: 14px;
 }
 #status {
   padding: 7px 12px;
   font-size: 12px;
-  border-top: 1px solid #aaa;
+  border-top: 1px solid var(--border);
   position: fixed;
   bottom: 0;
   width: 100%;
-  background: white;
+  background: var(--surface);
 }
 #toast {
   position: fixed;
@@ -287,8 +288,8 @@ nav button {
   left: 0;
   right: 0;
   padding: 10px;
-  background: #fff3d1;
-  border: 1px solid #222;
+  background: var(--toast);
+  border: 1px solid var(--text);
   z-index: 20;
   display: flex;
   justify-content: space-between;
@@ -323,8 +324,8 @@ label select {
   display: block;
   width: 100%;
   padding: 6px;
-  border: 1px solid #888;
-  background: white;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
   border-radius: 3px;
 }
 .check {
@@ -350,6 +351,6 @@ ol {
 }
 code {
   font-size: 0.9em;
-  border: 1px solid #aaa;
+  border: 1px solid var(--border);
   padding: 0 3px;
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme-channel="reflow">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,6 +9,7 @@
     />
     <title>正文重排</title>
     <link rel="stylesheet" href="reflow.css" />
+    <script type="module" src="theme.js"></script>
     <script type="module" src="reflow.js"></script>
   </head>
   <body>
@@ -19,6 +20,7 @@
       <span class="spacer"></span>
       <button id="annotate" type="button">AI 注释选中文本</button>
       <button id="original" type="button">原版</button>
+      <button type="button" data-theme-toggle title="切换主题" aria-label="切换主题">☾</button>
     </nav>
     <p id="status" role="status"></p>
     <main id="pages"></main>

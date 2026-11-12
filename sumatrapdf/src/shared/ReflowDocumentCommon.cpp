@@ -27,6 +27,7 @@
 #include "VirtKeys.h"
 #include "Settings.h"
 #include "AppSettings.h"
+#include "Theme.h"
 #include "AppTools.h"
 #include "DocController.h"
 #include "EngineBase.h"
@@ -34,6 +35,7 @@
 #include "TextSelection.h"
 #include "SumatraPDF.h"
 #include "MainWindow.h"
+#include "ContextNotes.h"
 #include "ContextNotesPlatform.h"
 #include "AIChatTypes.h"
 #include "WindowTab.h"
@@ -311,6 +313,10 @@ static void ReflowEvent(ReflowView* view, Str event, Str detail) {
         view->Eval(fmt("dispatchEvent(new CustomEvent(%s,{detail:%s}))", ReflowQuote(event), detail));
 }
 
+void ReflowDocumentUpdateTheme(MainWindow* win) {
+    ReflowEvent(FindReflow(win), StrL("themechange"), ContextNotesThemeJsonTemp());
+}
+
 bool ReflowDocumentAvailable(MainWindow* win) {
     auto* dm = win ? win->AsFixed() : nullptr;
     auto* engine = dm ? dm->GetEngine() : nullptr;
@@ -404,8 +410,9 @@ static TempStr ReflowAssets() {
 static bool ReflowResource(void*, Str resource, WebViewResourceResult* out) {
     while (len(resource) > 0 && resource.s[0] == '/') resource = Str(resource.s + 1, len(resource) - 1);
     bool html = str::Eq(resource, StrL("reflow.html"));
-    bool css = str::Eq(resource, StrL("reflow.css"));
-    bool js = str::Eq(resource, StrL("reflow.js")) || str::Eq(resource, StrL("reflow-model.js"));
+    bool css = str::Eq(resource, StrL("reflow.css")) || str::Eq(resource, StrL("theme.css"));
+    bool js = str::Eq(resource, StrL("reflow.js")) || str::Eq(resource, StrL("reflow-model.js")) ||
+              str::Eq(resource, StrL("theme.js"));
     if (!html && !css && !js) return false;
     Str bytes = file::ReadFile(path::JoinTemp(ReflowAssets(), resource));
     if (len(bytes) == 0) return false;
@@ -447,6 +454,10 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         if (json::PathMatch(value.path, StrL("i0")) && value.type == json::Type::String) data = value.value;
     Str action = ReflowField(data, StrL("action"));
     Str result = StrL("true");
+    if (ContextNotesThemeCall(action, result)) {
+        view->Resolve(id, 0, result);
+        return;
+    }
     int error = 0;
     if (str::Eq(action, StrL("ready"))) {
         view->ready = true;
@@ -557,7 +568,7 @@ static ReflowView* CreateReflow(MainWindow* win) {
     view->events.resolveAccelCmd = ReflowAccel;
     view->allowClipboardRead = false;
     view->allowExternalDrop = false;
-    view->defaultBackgroundColor = MkRgb(255, 255, 255);
+    view->defaultBackgroundColor = ThemeWindowBackgroundColor();
     CreateWebViewArgs args;
     args.parent = NotesCanvas(win);
 #if !defined(SUMATRA_NG)

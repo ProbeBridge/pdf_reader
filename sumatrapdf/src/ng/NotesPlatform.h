@@ -9,6 +9,7 @@ struct Gfx {
 };
 HWND NotesFrame(MainWindow*);
 HWND NotesCanvas(MainWindow*);
+bool NotesReadingActive(MainWindow*);
 void NotesRelayout(MainWindow*);
 void NotesExecute(MainWindow*, int);
 void NotesPostCommand(MainWindow*, int);

@@ -37,6 +37,7 @@
 #endif
 #include "Settings.h"
 #include "AppSettings.h"
+#include "Theme.h"
 #include "SumatraConfig.h"
 #include "AppTools.h"
 #include "DocController.h"
@@ -195,11 +196,32 @@ struct ContextNotes {
     PointF clickPagePoint;
     Rect clickViewport;
     int clickRotation = 0;
-    DWORD lastPositions = 0;
+    u64 lastPositions = 0;
+    Str readingKey;
+    Str readingDay;
+    Str readingPath;
+    Vec<int> readingPages;
+    u64 readingTick = 0;
+    u64 readingActivity = 0;
+    u64 readingSave = 0;
+    u64 readingMilliseconds = 0;
+    u64 readingPageSince = 0;
+    int readingPage = 0;
+    int readingPageCount = 0;
+    ScrollState readingScroll;
+    bool readingActive = false;
+    bool readingDirty = false;
+#if !defined(SUMATRA_NG)
+    UINT_PTR readingTimer = 0;
+#endif
 #if defined(SUMATRA_NG)
     double clickDue = 0;
 #endif
 };
+
+#if !defined(SUMATRA_NG)
+static void StartReadingTimer(MainWindow* win);
+#endif
 
 static TempStr JsonQuote(Str s) {
     return fmt("\"%s\"", json::EscapeStrTemp(s));
@@ -345,6 +367,30 @@ static void DispatchNotes(NotesView* view, Str name, Str json) {
     }
 }
 
+TempStr ContextNotesThemeJsonTemp() {
+    return IsLightColor(ThemeWindowBackgroundColor()) ? StrL("{\"dark\":false}") : StrL("{\"dark\":true}");
+}
+
+bool ContextNotesThemeCall(Str action, Str& result) {
+    if (str::Eq(action, StrL("toggleTheme"))) {
+        ToggleLightDarkTheme();
+        ScheduleSaveSettings();
+    } else if (!str::Eq(action, StrL("theme"))) {
+        return false;
+    }
+    result = ContextNotesThemeJsonTemp();
+    return true;
+}
+
+void ContextNotesUpdateTheme(MainWindow* win) {
+    if (auto* notes = win->contextNotes) {
+        Str theme = ContextNotesThemeJsonTemp();
+        DispatchNotes(notes->panel, StrL("themechange"), theme);
+        DispatchNotes(notes->history, StrL("themechange"), theme);
+    }
+    ReflowDocumentUpdateTheme(win);
+}
+
 void EmitContextNotesNetwork(MainWindow* win, Str payloadJson) {
     if (win && win->contextNotes) {
         DispatchNotes(win->contextNotes->panel, StrL("netevent"), payloadJson);
@@ -358,6 +404,203 @@ static void BroadcastStore(Str key, Str value) {
             DispatchNotes(win->contextNotes->panel, StrL("storechange"), change);
         }
     }
+}
+
+static constexpr u64 kReadingSampleMs = 1000;
+static constexpr u64 kReadingSaveMs = 30000;
+static constexpr u64 kReadingIdleMs = 5 * 60 * 1000;
+static constexpr u64 kReadingPageDwellMs = 2000;
+static constexpr int kReadingDaySeconds = 25 * 60 * 60;
+
+static TempStr ReadingDayTemp(time_t now = time(nullptr)) {
+    tm local{};
+#if OS_WIN
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    return fmt("%04d-%02d-%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
+}
+
+// The notes store lock also makes statistics updates atomic across windows/processes.
+static bool PutReadingStat(Str key, Str value) {
+    int index = gStoreKeys.Find(key);
+    Str previous = index >= 0 ? str::Dup(gStoreValues[index]) : Str{};
+    AutoFree<char> freePrevious(previous.s);
+    if (index >= 0) {
+        gStoreValues.SetAt(index, value);
+    } else {
+        gStoreKeys.Append(key);
+        gStoreValues.Append(value);
+    }
+    if (SaveNotesStore()) return true;
+    if (index >= 0) {
+        gStoreValues.SetAt(index, previous);
+    } else {
+        gStoreKeys.RemoveAt(len(gStoreKeys) - 1);
+        gStoreValues.RemoveAt(len(gStoreValues) - 1);
+    }
+    return false;
+}
+
+static bool FlushReadingStats(MainWindow* win) {
+    auto* notes = win->contextNotes;
+    if (!notes || !notes->readingDirty || len(notes->readingKey) == 0) return true;
+    NotesStoreGuard guard;
+    if (!guard.locked) return false;
+    LoadNotesStore(NotesStoreLoad::Refresh);
+    if (gStoreFailed) return false;
+    Str key = fmt("stats:reading:%s:%s", notes->readingDay, notes->readingKey);
+    int index = gStoreKeys.Find(key);
+    Str previous = index >= 0 ? gStoreValues[index] : StrL("{}");
+    Vec<int> pages;
+    json::Reader reader(previous);
+    for (json::Value& value : reader) {
+        if (json::PathMatch(value.path, StrL("/pages"), StrL("*")) && value.type == json::Type::Number) {
+            int page = atoi(CStrTemp(value.value));
+            if (page > 0 && !VecContains(pages, page)) VecAppend(pages, page);
+        }
+    }
+    if (!reader.Ok()) return false;
+    for (int page : notes->readingPages) {
+        if (!VecContains(pages, page)) VecAppend(pages, page);
+    }
+    Str previousSeconds = JsonField(previous, StrL("seconds"));
+    int seconds = previousSeconds ? std::clamp(atoi(CStrTemp(previousSeconds)), 0, kReadingDaySeconds) : 0;
+    seconds = std::min(kReadingDaySeconds, seconds + (int)(notes->readingMilliseconds / 1000));
+    str::Builder list;
+    list.AppendChar('[');
+    for (int i = 0; i < len(pages); i++) {
+        if (i) list.AppendChar(',');
+        list.Append(fmt("%d", pages[i]));
+    }
+    list.AppendChar(']');
+    Str record =
+        fmt("{\"kind\":\"reading\",\"day\":%s,\"document\":%s,\"path\":%s,\"title\":%s,"
+            "\"pages\":%s,\"seconds\":%d,\"pageCount\":%d}",
+            JsonQuote(notes->readingDay), JsonQuote(notes->readingKey), JsonQuote(notes->readingPath),
+            JsonQuote(path::GetBaseNameTemp(notes->readingPath)), ToStrTemp(list), seconds, notes->readingPageCount);
+    if (!PutReadingStat(key, record)) return false;
+    notes->readingMilliseconds %= 1000;
+    notes->readingDirty = false;
+    notes->readingSave = GetTickCount64();
+    guard.Unlock();
+    BroadcastStore(key, record);
+    return true;
+}
+
+static void ReadingStatsTick(MainWindow* win) {
+    auto* notes = win->contextNotes;
+    if (!notes) return;
+    u64 now = GetTickCount64();
+    if (now - notes->readingTick < kReadingSampleMs) return;
+    u64 elapsed = notes->readingTick ? now - notes->readingTick : 0;
+    notes->readingTick = now;
+    auto* tab = win->CurrentTab();
+    auto* ctrl = tab ? tab->ctrl : nullptr;
+    bool active = ctrl && ctrl->PageCount() > 0 && notes->documentKey && NotesReadingActive(win) &&
+                  !win->IsCurrentTabAbout() && !notes->blocked;
+    if (!active) {
+        if (notes->readingActive) FlushReadingStats(win);
+        notes->readingActive = false;
+        return;
+    }
+    Str day = ReadingDayTemp();
+    if (!str::Eq(notes->readingKey, notes->documentKey) || !str::Eq(notes->readingDay, day)) {
+        if (!FlushReadingStats(win)) return;
+        str::ReplaceWithCopy(&notes->readingKey, notes->documentKey);
+        str::ReplaceWithCopy(&notes->readingDay, day);
+        str::ReplaceWithCopy(&notes->readingPath, notes->documentPath);
+        VecReset(notes->readingPages);
+        notes->readingPage = 0;
+        notes->readingMilliseconds = 0;
+        notes->readingActive = false;
+        notes->readingActivity = now;
+        notes->readingSave = now;
+    }
+    int page = ctrl->CurrentPageNo();
+    notes->readingPageCount = ctrl->PageCount();
+    ScrollState scroll;
+    if (auto* model = win->AsFixed()) scroll = model->GetScrollState();
+    if (!notes->readingActive || page != notes->readingPage || scroll.x != notes->readingScroll.x ||
+        scroll.y != notes->readingScroll.y) {
+        notes->readingActivity = now;
+    }
+    if (!notes->readingActive || page != notes->readingPage) {
+        notes->readingPage = page;
+        notes->readingPageSince = now;
+    }
+    notes->readingScroll = scroll;
+    if (page > 0 && page <= notes->readingPageCount && now - notes->readingPageSince >= kReadingPageDwellMs &&
+        !VecContains(notes->readingPages, page)) {
+        VecAppend(notes->readingPages, page);
+        notes->readingDirty = true;
+    }
+    if (notes->readingActive && elapsed <= kReadingSampleMs * 2 && now - notes->readingActivity < kReadingIdleMs) {
+        notes->readingMilliseconds += elapsed;
+        notes->readingDirty = true;
+    }
+    notes->readingActive = true;
+    if (notes->readingDirty && now - notes->readingSave >= kReadingSaveMs) FlushReadingStats(win);
+}
+
+static bool RecordVocabulary(Str id, Str createdAt) {
+    if (len(id) == 0 || len(id) > 128) return false;
+    NotesStoreGuard guard;
+    if (!guard.locked) return false;
+    LoadNotesStore(NotesStoreLoad::Refresh);
+    if (gStoreFailed) return false;
+    time_t created = time(nullptr);
+    long long milliseconds = createdAt ? strtoll(CStrTemp(createdAt), nullptr, 10) : 0;
+    if (milliseconds > 0) created = std::min(created, (time_t)(milliseconds / 1000));
+    Str day = ReadingDayTemp(created);
+    Str key = str::JoinTemp(StrL("stats:words:"), day);
+    int index = gStoreKeys.Find(key);
+    StrVec ids;
+    if (index >= 0) {
+        json::Reader reader(gStoreValues[index]);
+        for (json::Value& value : reader) {
+            if (json::PathMatch(value.path, StrL("/ids"), StrL("*")) && value.type == json::Type::String)
+                ids.Append(value.value);
+        }
+        if (!reader.Ok()) return false;
+    }
+    if (ids.Find(id) >= 0) return true;
+    ids.Append(id);
+    str::Builder list;
+    list.AppendChar('[');
+    for (int i = 0; i < len(ids); i++) {
+        if (i) list.AppendChar(',');
+        list.Append(JsonQuote(ids[i]));
+    }
+    list.AppendChar(']');
+    Str record = fmt("{\"kind\":\"vocabulary\",\"day\":%s,\"ids\":%s}", JsonQuote(day), ToStrTemp(list));
+    if (!PutReadingStat(key, record)) return false;
+    guard.Unlock();
+    BroadcastStore(key, record);
+    return true;
+}
+
+static TempStr ReadingStatsJson() {
+    for (MainWindow* win : gWindows) {
+        ReadingStatsTick(win);
+        if (!FlushReadingStats(win)) return {};
+    }
+    NotesStoreGuard guard;
+    if (!guard.locked) return {};
+    LoadNotesStore(NotesStoreLoad::Refresh);
+    if (gStoreFailed) return {};
+    str::Builder data;
+    data.AppendChar('{');
+    bool first = true;
+    for (int i = 0; i < len(gStoreKeys); i++) {
+        if (!str::StartsWith(gStoreKeys[i], StrL("stats:"))) continue;
+        if (!first) data.AppendChar(',');
+        first = false;
+        data.Append(fmt("%s:%s", JsonQuote(gStoreKeys[i]), gStoreValues[i]));
+    }
+    data.AppendChar('}');
+    return ToStrTemp(data);
 }
 
 static TempStr NotesAssetPath() {
@@ -594,8 +837,23 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
     }
     Str action = JsonField(data, StrL("action"));
     Str result = StrL("true");
+    if (ContextNotesThemeCall(action, result)) {
+        view->Resolve(id, 0, result);
+        return;
+    }
     int error = 0;
-    if (str::Eq(action, StrL("ready"))) {
+    if (str::Eq(action, StrL("readingStats"))) {
+        result = ReadingStatsJson();
+        if (len(result) == 0) {
+            error = 1;
+            result = JsonQuote(StrL("Cannot read reading statistics."));
+        }
+    } else if (str::Eq(action, StrL("recordVocabulary"))) {
+        if (!RecordVocabulary(JsonField(data, StrL("id")), JsonField(data, StrL("createdAt")))) {
+            error = 1;
+            result = JsonQuote(StrL("Cannot save vocabulary statistics."));
+        }
+    } else if (str::Eq(action, StrL("ready"))) {
         view->ready = true;
         n->clickEnabled = str::Eq(JsonField(data, StrL("click")), StrL("true"));
         Str queued = str::JoinTemp(StrL("["), JoinTemp(&n->pendingSelections, StrL(",")), StrL("]"));
@@ -768,6 +1026,9 @@ static ContextNotes* EnsureNotes(MainWindow* win) {
         if (idx >= 0 && str::Eq(JsonField(gStoreValues[idx], StrL("clickToAnnotate")), StrL("false"))) {
             win->contextNotes->clickEnabled = false;
         }
+#if !defined(SUMATRA_NG)
+        StartReadingTimer(win);
+#endif
     }
     return win->contextNotes;
 }
@@ -791,7 +1052,7 @@ static NotesView* CreateNotesView(MainWindow* win, bool history) {
     view->events.resolveAccelCmd = NotesAccel;
     view->allowClipboardRead = false;
     view->allowExternalDrop = false;
-    view->defaultBackgroundColor = MkRgb(255, 255, 255);
+    view->defaultBackgroundColor = ThemeWindowBackgroundColor();
     CreateWebViewArgs args;
     args.parent = history ? NotesCanvas(win) : NotesFrame(win);
 #if !defined(SUMATRA_NG)
@@ -1354,6 +1615,10 @@ void ContextNotesDestroy(MainWindow* win) {
     if (!n) {
         return;
     }
+    FlushReadingStats(win);
+#if !defined(SUMATRA_NG)
+    if (n->readingTimer) KillTimer(nullptr, n->readingTimer);
+#endif
     ContextNotesCancelClick(win);
     NotesView* panel = n->panel;
     NotesView* history = n->history;
@@ -1366,6 +1631,9 @@ void ContextNotesDestroy(MainWindow* win) {
     str::Free(n->documentPath);
     str::Free(n->documentKey);
     str::Free(n->positions);
+    str::Free(n->readingKey);
+    str::Free(n->readingDay);
+    str::Free(n->readingPath);
     delete n;
     win->contextNotes = nullptr;
 #if defined(SUMATRA_NG)
@@ -1378,6 +1646,7 @@ void ContextNotesTick(MainWindow* win) {
     auto* n = win->contextNotes;
     if (n && n->clickDue > 0 && gp::TimeNow() >= n->clickDue) ContextNotesRunClick(win);
     ContextNotesSync(win);
+    ReadingStatsTick(win);
     ReflowDocumentLayout(win);
     ContextNotesLayout(win);
     ContextNotesActionsTick(win);
@@ -1413,6 +1682,18 @@ TempStr NotesAssetsTemp() {
     return {};
 }
 #if !defined(SUMATRA_NG)
+static void CALLBACK ReadingStatsTimer(HWND, UINT, UINT_PTR timer, DWORD) {
+    for (MainWindow* win : gWindows) {
+        if (win->contextNotes && win->contextNotes->readingTimer == timer) {
+            ReadingStatsTick(win);
+            return;
+        }
+    }
+}
+static void StartReadingTimer(MainWindow* win) {
+    win->contextNotes->readingTimer = SetTimer(nullptr, 0, (UINT)kReadingSampleMs, ReadingStatsTimer);
+}
+
 static void CALLBACK NotesClickTimer(HWND canvas, UINT, UINT_PTR, DWORD) {
     for (MainWindow* win : gWindows) {
         if (win->hwndCanvas == canvas) {

@@ -1,0 +1,150 @@
+.history-navigation {
+  flex-direction: column;
+  margin: 27px 0 30px -22px;
+  gap: 5px;
+}
+.view-tab {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0 24px 24px 0;
+  padding: 9px 15px;
+}
+.view-tab.selected {
+  margin: 0;
+  background: var(--accent-surface);
+  border-color: var(--accent-border);
+}
+.stats-heading,
+.stats-axis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stats-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.stats-range select {
+  width: auto;
+  margin: 0;
+}
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 20px 0;
+}
+.stat-card,
+.stats-chart {
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 18px;
+}
+.stat-card h3 {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 8px;
+  font-weight: 400;
+}
+.stat-card strong {
+  font-size: clamp(18px, 2.4vw, 28px);
+}
+.stats-legend {
+  display: flex;
+  gap: 20px;
+  font-size: 12px;
+}
+.stats-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+.reading-legend::before,
+.reading-bar {
+  background: var(--accent);
+}
+.words-legend::before,
+.words-bar {
+  background: #3164b5;
+}
+:root[data-theme="dark"] .words-legend::before,
+:root[data-theme="dark"] .words-bar {
+  background: #80b5ff;
+}
+.stats-bars {
+  display: grid;
+  grid-template-columns: repeat(var(--days), minmax(0, 1fr));
+  align-items: end;
+  gap: 1px;
+  height: 145px;
+  margin-top: 18px;
+  border-bottom: 1px solid var(--divider);
+}
+.stats-pair {
+  display: flex;
+  align-items: end;
+  gap: 1px;
+  height: 100%;
+}
+.stats-pair span {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+}
+.stats-axis,
+.stats-caption,
+.stats-explanation {
+  font-size: 12px;
+  color: var(--muted);
+}
+.stats-axis {
+  margin-top: 8px;
+}
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.stats-table caption {
+  text-align: left;
+  font-weight: 600;
+  padding: 12px 0;
+}
+.stats-table th,
+.stats-table td {
+  text-align: right;
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--divider);
+}
+.stats-table th:first-child {
+  text-align: left;
+}
+.stats-table tbody th {
+  font-weight: 400;
+}
+.stats-explanation {
+  margin-top: 20px;
+  line-height: 1.8;
+}
+@media (max-width: 760px) {
+  header {
+    flex-wrap: wrap;
+  }
+  .search {
+    min-width: 140px;
+  }
+  .stats-cards {
+    gap: 6px;
+  }
+  .stat-card {
+    padding: 12px 8px;
+  }
+}
