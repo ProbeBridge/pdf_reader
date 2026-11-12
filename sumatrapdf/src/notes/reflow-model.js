@@ -24,6 +24,7 @@ export function safeReflowContent(html, owner = document) {
       }
       const element = owner.createElement(tag);
       if (tag === "div") {
+        if (child.getAttribute("data-source-heading") === "true") element.dataset.sourceHeading = "true";
         const box = (child.getAttribute("data-source-box") || "").split(",").map(Number);
         if (box.length === 4 && box.every(Number.isFinite) && box[2] > 0 && box[3] > 0)
           element.dataset.sourceBox = box.join(",");

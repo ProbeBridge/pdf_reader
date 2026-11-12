@@ -102,6 +102,24 @@ main {
 .page-content h3 {
   font-size: 1.15em;
 }
+.page-content [data-source-heading] {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65em;
+  margin: 0.8em 0 0.4em;
+  font-weight: 700;
+  break-after: avoid;
+}
+.page-content [data-source-heading] > div:first-child:not(:last-child) {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.page-content [data-source-heading] > div:last-child {
+  flex: 1 1 auto;
+}
+.page-content [data-source-heading] :is(p, h1, h2, h3, h4, h5, h6) {
+  margin: 0;
+}
 .page-content [data-page-region] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);

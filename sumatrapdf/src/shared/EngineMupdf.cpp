@@ -9231,6 +9231,72 @@ static bool ReflowClipKeepsBody(fz_stext_block* block, fz_rect media, const Vec<
     return true;
 }
 
+static bool ReflowSectionNumber(fz_stext_line* line, fz_stext_char** titleOut = nullptr) {
+    int digits = 0, dots = 0;
+    auto* c = ReflowLineStart(line);
+    for (; c; c = c->next) {
+        if (c->c == ' ' || c->c == '\t') break;
+        if (c->c >= '0' && c->c <= '9') {
+            digits++;
+        } else if (c->c == '.' && digits > 0) {
+            dots++;
+            digits = 0;
+        } else {
+            return false;
+        }
+    }
+    while (c && (c->c == ' ' || c->c == '\t')) c = c->next;
+    if (titleOut) *titleOut = c;
+    return dots > 0 && digits > 0 && (titleOut || !c);
+}
+
+static bool ReflowHeadingFont(fz_stext_char* c) {
+    if (!c || !c->font) return false;
+    Str font(c->font->name);
+    // Medium-weight section titles often have no PDF bold flag.
+    return (c->flags & FZ_STEXT_BOLD) || str::ContainsI(font, StrL("Bold")) || str::EndsWithI(font, StrL("-Medium"));
+}
+
+static bool ReflowSingleHeading(const ReflowPart& part) {
+    if (part.region != ReflowRegion::Body || part.block->type != FZ_STEXT_BLOCK_TEXT) return false;
+    auto* line = part.block->u.t.first_line;
+    if (!line || line->wmode || line->dir.x < .99f || fabsf(line->dir.y) > .01f) return false;
+    fz_stext_char* title = nullptr;
+    auto* first = ReflowLineStart(line);
+    if (!ReflowSectionNumber(line, &title) || !ReflowHeadingFont(first) || first->size <= 0) return false;
+    // One block can still have separate number/title lines on the same baseline.
+    if (!title && line->next) title = ReflowLineStart(line->next);
+    if (!title || !title->font || strcmp(first->font->name, title->font->name) != 0) return false;
+    for (auto* next = line->next; next; next = next->next) {
+        auto* c = ReflowLineStart(next);
+        if (!c || !c->font || next->wmode || next->dir.x < .99f || fabsf(next->dir.y) > .01f ||
+            fabsf(first->origin.y - c->origin.y) > first->size * .2f || fabsf(first->size - c->size) > .25f ||
+            strcmp(first->font->name, c->font->name) != 0)
+            return false;
+    }
+    return true;
+}
+
+static bool ReflowHeadingPair(const ReflowPart& number, const ReflowPart& title) {
+    if (number.region != ReflowRegion::Body || title.region != ReflowRegion::Body ||
+        number.block->type != FZ_STEXT_BLOCK_TEXT || title.block->type != FZ_STEXT_BLOCK_TEXT)
+        return false;
+    auto* n = number.block->u.t.first_line;
+    auto* t = title.block->u.t.first_line;
+    if (!n || !t || n != number.block->u.t.last_line || t != title.block->u.t.last_line || n->wmode || t->wmode ||
+        n->dir.x < .99f || t->dir.x < .99f || fabsf(n->dir.y) > .01f || fabsf(t->dir.y) > .01f ||
+        !ReflowSectionNumber(n))
+        return false;
+    auto* a = ReflowLineStart(n);
+    auto* b = ReflowLineStart(t);
+    if (!a || !b || !a->font || !b->font || a->size <= 0 || fabsf(a->size - b->size) > .25f ||
+        strcmp(a->font->name, b->font->name) != 0)
+        return false;
+    if (!ReflowHeadingFont(a)) return false;
+    float gap = title.box.x0 - number.box.x1;
+    return fabsf(a->origin.y - b->origin.y) <= a->size * .2f && gap >= a->size * .25f && gap <= a->size * 6;
+}
+
 static void WriteReflowPart(fz_context* ctx, fz_output* output, fz_stext_page* page, const ReflowPart& part) {
     auto box = part.box;
     fz_write_printf(ctx, output, "<div data-source-box=\"%g,%g,%g,%g\">\n", box.x0, box.y0, box.x1 - box.x0,
@@ -9294,8 +9360,18 @@ static void WriteReflowBlocks(fz_context* ctx, fz_output* output, fz_stext_page*
     for (const auto& part : tableMargins) VecAppend(parts, part);
     fz_write_printf(ctx, output, "<div id=\"page%d\">\n", pageNo);
     WriteReflowRegion(ctx, output, page, parts, ReflowRegion::Header);
-    for (const auto& part : parts)
-        if (part.region == ReflowRegion::Body) WriteReflowPart(ctx, output, page, part);
+    for (int i = 0; i < len(parts); i++) {
+        const auto& part = parts[i];
+        if (part.region != ReflowRegion::Body) continue;
+        bool pair = i + 1 < len(parts) && ReflowHeadingPair(part, parts[i + 1]);
+        bool heading = pair || ReflowSingleHeading(part);
+        if (heading) fz_write_printf(ctx, output, "<div data-source-heading=\"true\">\n");
+        WriteReflowPart(ctx, output, page, part);
+        if (pair) {
+            WriteReflowPart(ctx, output, page, parts[++i]);
+        }
+        if (heading) fz_write_printf(ctx, output, "</div>\n");
+    }
     WriteReflowRegion(ctx, output, page, parts, ReflowRegion::Footer);
     fz_write_printf(ctx, output, "</div>\n");
 }

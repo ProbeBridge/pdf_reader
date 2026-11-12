@@ -65,13 +65,14 @@ nav button {
 }
 #cards {
   font-size: calc(15px * var(--scale));
-  padding: 20px 12px 90px;
+  line-height: 1.5;
+  padding: 24px 12px 90px;
   overflow-wrap: anywhere;
 }
 .card {
   position: relative;
   border-bottom: 1px solid #aaa;
-  padding: 20px 0;
+  padding: 14px 0;
   scroll-margin-top: 100px;
 }
 .card-head.sentence .meaning {
@@ -79,7 +80,7 @@ nav button {
 }
 .card > .tools {
   position: absolute;
-  top: -19px;
+  top: -25px;
   left: 0;
   z-index: 2;
   visibility: hidden;
@@ -150,7 +151,8 @@ nav button {
 .card-head {
   display: flex;
   align-items: baseline;
-  gap: 9px;
+  column-gap: 9px;
+  row-gap: 2px;
   flex-wrap: wrap;
 }
 .quote {
@@ -210,8 +212,20 @@ nav button {
   font-size: 0.95em;
 }
 .detail p,
-.answer p {
-  margin: 8px 0;
+.answer p,
+.detail ul,
+.detail ol,
+.answer ul,
+.answer ol {
+  margin: 0.4em 0;
+}
+.detail-body > :first-child,
+.answer > :first-child {
+  margin-top: 0;
+}
+.detail-body > :last-child,
+.answer > :last-child {
+  margin-bottom: 0;
 }
 .detail summary {
   cursor: pointer;

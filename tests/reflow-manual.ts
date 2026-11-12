@@ -162,6 +162,80 @@ try {
       codepoints: source.length,
     };
     report.pages.push(result);
+    if (number === 341 && args.includes("--headings")) {
+      result.headingLayout = [];
+      for (const zoom of [100, 400]) {
+        sendCommandSync(app.frame, cmdId(`CmdZoom${zoom}`));
+        await flow.waitForFunction(
+          (zoom: number) =>
+            document
+              .querySelector("#page-label")
+              ?.textContent?.includes(`${zoom}%`),
+          zoom,
+        );
+        await settle();
+        const heading = await flow.evaluate(() => {
+          const root = document.querySelector(
+            '.source-page[data-page="341"] .page-content',
+          )!;
+          const group = [
+            ...root.querySelectorAll('[data-source-heading="true"]'),
+          ].find((e) => /6\.1\.4\.1\s*Interrupt/.test(e.textContent || ""));
+          if (!group) return { found: false };
+          const next = [
+            ...root.querySelectorAll('[data-source-heading="true"]'),
+          ].find((e) => /6\.1\.4\.2\s*FIFO Status/.test(e.textContent || ""));
+          group.scrollIntoView({ block: "center" });
+          const boxes = [...group.children].map((child) => {
+            const text = child.querySelector("p,h1,h2,h3,h4,h5,h6")!;
+            const range = document.createRange();
+            range.selectNodeContents(text);
+            const box = range.getBoundingClientRect();
+            return {
+              top: box.top,
+              bottom: box.bottom,
+              left: box.left,
+              right: box.right,
+              weight: Number(getComputedStyle(text).fontWeight),
+            };
+          });
+          return {
+            found: true,
+            nextBold:
+              !!next &&
+              Number(
+                getComputedStyle(next.querySelector("p,h1,h2,h3,h4,h5,h6")!)
+                  .fontWeight,
+              ) >= 600,
+            boxes,
+            overflow:
+              document.documentElement.scrollWidth -
+              document.documentElement.clientWidth,
+          };
+        });
+        result.headingLayout.push({ zoom, ...heading });
+        assert.ok(
+          heading.found,
+          "the section number and title must form one source heading",
+        );
+        assert.ok(
+          heading.nextBold,
+          "an already joined numbered heading must retain its bold weight too",
+        );
+        assert.equal(heading.boxes!.length, 2);
+        assert.ok(
+          Math.abs(heading.boxes![0].top - heading.boxes![1].top) < 2,
+          "section number and title must share a line",
+        );
+        assert.ok(
+          heading.boxes!.every((box: any) => box.weight >= 600),
+          "the heading must retain its visible bold weight",
+        );
+        assert.ok(heading.overflow! <= 1);
+        await settle();
+        await flow.screenshot({ path: join(output, `heading-${zoom}.png`) });
+      }
+    }
     if (number === 334 && args.includes("--bullets")) {
       result.bullets = display.filter((char) => char === "\u2022").length;
       assert.equal(source.filter((char) => char === "\uF06C").length, 2);
