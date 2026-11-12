@@ -211,12 +211,121 @@ try {
           cells: content.querySelectorAll("td,th").length,
           description: (content.textContent?.match(/Description/g) || [])
             .length,
+          timestampHeading:
+            /5\.2\.4\.3\s+0x0040\s+E902\s+Timestamp\s+Test\s+Mode\s+Select\s+Register/.test(
+              content.textContent || "",
+            ),
           ...chosen,
         };
       },
       { number, sourceText: page.sourceText, displayText: page.displayText },
     );
     result.ui = ui;
+    if (args.includes("--page-regions")) {
+      writeFileSync(
+        join(output, `page${number}-dom.html`),
+        await flow
+          .locator(`.source-page[data-page="${number}"] .page-content`)
+          .innerHTML(),
+      );
+      result.regions = await flow.evaluate((number: number) => {
+        const content = document.querySelector(
+          `.source-page[data-page="${number}"] .page-content`,
+        )!;
+        const header = content.querySelector('[data-page-region="header"]');
+        const footer = content.querySelector('[data-page-region="footer"]');
+        const text = (element: Element | null) =>
+          element?.textContent?.replace(/\s+/g, " ").trim();
+        return {
+          header: text(header),
+          footer: text(footer),
+          logoLeft: !!header?.querySelector('[data-source-align="left"] img'),
+          labelRight: text(
+            header?.querySelector('[data-source-align="right"]') || null,
+          ),
+          copyrightCenter: text(
+            footer?.querySelector('[data-source-align="center"]') || null,
+          ),
+          numberRight: text(
+            footer?.querySelector('[data-source-align="right"]') || null,
+          ),
+        };
+      }, number);
+      assert.equal(result.regions.header, "Confidential");
+      assert.ok(result.regions.logoLeft);
+      assert.equal(result.regions.labelRight, "Confidential");
+      assert.match(
+        result.regions.copyrightCenter || "",
+        /^Copyright©2025 Allwinner Technology/,
+      );
+      assert.equal(result.regions.numberRight, String(number - 20));
+      result.regionLayout = [];
+      for (const zoom of [100, 400]) {
+        sendCommandSync(app.frame, cmdId(`CmdZoom${zoom}`));
+        await flow.waitForFunction(
+          (zoom: number) =>
+            document
+              .querySelector("#page-label")
+              ?.textContent?.includes(`${zoom}%`),
+          zoom,
+        );
+        await settle();
+        const layout = await flow.evaluate((number: number) => {
+          const content = document.querySelector(
+            `.source-page[data-page="${number}"] .page-content`,
+          )!;
+          const header = content.querySelector('[data-page-region="header"]')!;
+          const footer = content.querySelector('[data-page-region="footer"]')!;
+          const textBox = (element: Element) => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            return range.getBoundingClientRect();
+          };
+          const h = header.getBoundingClientRect(),
+            f = footer.getBoundingClientRect();
+          const label = textBox(
+            header.querySelector('[data-source-align="right"]')!,
+          );
+          const copyright = textBox(
+            footer.querySelector('[data-source-align="center"]')!,
+          );
+          const page = textBox(
+            footer.querySelector('[data-source-align="right"]')!,
+          );
+          const logo = header.querySelector("img")!.getBoundingClientRect();
+          const body = [...content.querySelectorAll("[data-source-box]")]
+            .filter((element) => !element.closest("[data-page-region]"))
+            .map((element) => element.getBoundingClientRect());
+          return {
+            logoLeft: logo.left - h.left,
+            headerRight: h.right - label.right,
+            copyrightCenter:
+              (copyright.left + copyright.right - f.left - f.right) / 2,
+            pageRight: f.right - page.right,
+            headerBeforeBody:
+              h.bottom <= Math.min(...body.map((rect) => rect.top)) + 1,
+            footerAfterBody:
+              f.top >= Math.max(...body.map((rect) => rect.bottom)) - 1,
+            overflow:
+              document.documentElement.scrollWidth -
+              document.documentElement.clientWidth,
+          };
+        }, number);
+        result.regionLayout.push({ zoom, ...layout });
+        assert.ok(
+          Math.abs(layout.logoLeft) < 2 && Math.abs(layout.headerRight) < 2,
+        );
+        assert.ok(
+          Math.abs(layout.copyrightCenter) < 2 &&
+            Math.abs(layout.pageRight) < 2,
+        );
+        assert.ok(
+          layout.headerBeforeBody &&
+            layout.footerAfterBody &&
+            layout.overflow <= 1,
+        );
+      }
+    }
     if (number === 334 && args.includes("--paragraphs")) {
       const expected =
         "The RISC-V system includes RISC IP core and related peripheral devices (CPUs_E902_CFG, TIMERSTAMP, TIMER_GRAYDEC, TIMER_GRAYENC, and so on), which is able to be interconnected to CPUX system by STBY AHB Matrix.";
@@ -492,9 +601,12 @@ try {
       "source anchors must still index the exact original codepoint positions",
     );
     if (number === 337) {
-      assert.equal(ui.tables, 5);
-      assert.equal(ui.cells, 79);
+      // The former fifth table was a false grid joining the running header
+      // to the section heading. Preserve all four actual register tables.
+      assert.equal(ui.tables, 4);
+      assert.equal(ui.cells, 75);
       assert.equal(ui.description, 4);
+      assert.ok(ui.timestampHeading);
     }
     sendCommandSync(app.frame, cmdId("CmdZoom100"));
     await flow.waitForFunction(() =>

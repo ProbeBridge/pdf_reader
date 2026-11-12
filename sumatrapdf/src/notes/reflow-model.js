@@ -27,6 +27,10 @@ export function safeReflowContent(html, owner = document) {
         const box = (child.getAttribute("data-source-box") || "").split(",").map(Number);
         if (box.length === 4 && box.every(Number.isFinite) && box[2] > 0 && box[3] > 0)
           element.dataset.sourceBox = box.join(",");
+        const region = child.getAttribute("data-page-region");
+        if (region === "header" || region === "footer") element.dataset.pageRegion = region;
+        const align = child.getAttribute("data-source-align");
+        if (["left", "center", "right"].includes(align)) element.dataset.sourceAlign = align;
       }
       if (tag === "img") {
         const src = child.getAttribute("src") || "";

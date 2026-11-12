@@ -8989,30 +8989,256 @@ static void WriteReflowPage(fz_context* ctx, void* state, const void* data, size
     fz_append_data(ctx, buffer, data, size);
 }
 
-static void WriteReflowBlocks(fz_context* ctx, fz_output* output, fz_stext_page* page, int pageNo) {
-    fz_write_printf(ctx, output, "<div id=\"page%d\">\n", pageNo);
-    for (auto* block = page->first_block; block; block = block->next) {
-        if (block->type != FZ_STEXT_BLOCK_TEXT && block->type != FZ_STEXT_BLOCK_IMAGE &&
-            block->type != FZ_STEXT_BLOCK_STRUCT)
-            continue;
-        fz_rect box = block->bbox;
-        fz_write_printf(ctx, output, "<div data-source-box=\"%g,%g,%g,%g\">\n", box.x0, box.y0, box.x1 - box.x0,
-                        box.y1 - box.y0);
-        fz_stext_page single = *page;
-        single.first_block = single.last_block = block;
-        auto* next = block->next;
-        block->next = nullptr;
+enum class ReflowRegion {
+    Body,
+    Header,
+    Footer
+};
+
+struct ReflowMarginRef {
+    fz_rect box;
+    u64 hash = 0;
+    int width = 0;
+    int height = 0;
+};
+
+// Require repetition in a neighboring page's edge band. A unique title near
+// the top stays in the body; numeric page labels may change between pages.
+static fz_rect ReflowUnitBox(fz_rect box, fz_rect media) {
+    float width = media.x1 - media.x0, height = media.y1 - media.y0;
+    return {(box.x0 - media.x0) / width, (box.y0 - media.y0) / height, (box.x1 - media.x0) / width,
+            (box.y1 - media.y0) / height};
+}
+
+static ReflowRegion ReflowMargin(fz_rect box) {
+    constexpr float headerEnd = .075f;
+    constexpr float footerStart = .935f;
+    if (box.y0 >= 0 && box.y1 <= headerEnd) return ReflowRegion::Header;
+    if (box.y0 >= footerStart && box.y1 <= 1) return ReflowRegion::Footer;
+    return ReflowRegion::Body;
+}
+
+static u64 ReflowMarginHash(fz_stext_line* line) {
+    u64 hash = 14695981039346656037ULL;
+    bool number = false;
+    for (auto* ch = line->first_char; ch; ch = ch->next) {
+        int c = ch->c;
+        if (c <= ' ' || c == 0xa0 || c == kReflowReplacementRune) continue;
+        bool digit = c >= '0' && c <= '9';
+        if (digit && number) continue;
+        number = digit;
+        hash = (hash ^ (digit ? '#' : c)) * 1099511628211ULL;
+    }
+    return hash;
+}
+
+static void CollectReflowMargins(fz_stext_block* block, fz_rect media, Vec<ReflowMarginRef>& refs) {
+    for (; block; block = block->next) {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down) {
+            CollectReflowMargins(block->u.s.down->first_block, media, refs);
+        } else if (block->type == FZ_STEXT_BLOCK_TEXT) {
+            for (auto* line = block->u.t.first_line; line; line = line->next) {
+                fz_rect box = ReflowUnitBox(line->bbox, media);
+                if (ReflowMargin(box) != ReflowRegion::Body)
+                    VecAppend(refs, ReflowMarginRef{box, ReflowMarginHash(line)});
+            }
+        } else if (block->type == FZ_STEXT_BLOCK_IMAGE &&
+                   ReflowMargin(ReflowUnitBox(block->bbox, media)) != ReflowRegion::Body) {
+            auto* image = block->u.i.image;
+            VecAppend(refs, ReflowMarginRef{ReflowUnitBox(block->bbox, media), 0, image->w, image->h});
+        }
+    }
+}
+
+static void ReflowNeighborMargins(EngineMupdf* engine, int pageNo, Vec<ReflowMarginRef>& refs) {
+    auto* ctx = engine->Ctx();
+    for (int neighbor : {pageNo - 1, pageNo + 1}) {
+        if (neighbor < 1 || neighbor > engine->PageCount()) continue;
+        fz_stext_page* text = nullptr;
+        fz_var(text);
         fz_try(ctx) {
-            fz_print_stext_page_as_xhtml(ctx, output, &single, 0);
+            auto* page = GetFzPageInfoLocked(engine, engine->LocationFromPageNo(neighbor), true, nullptr);
+            auto opts = NewTextPageOptions(FZ_STEXT_PRESERVE_IMAGES);
+            if (page && page->page) text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
+            if (text) CollectReflowMargins(text->first_block, text->mediabox, refs);
         }
         fz_always(ctx) {
-            block->next = next;
+            fz_drop_stext_page(ctx, text);
         }
         fz_catch(ctx) {
-            fz_rethrow(ctx);
+            fz_report_error(ctx);
+        }
+    }
+}
+
+static bool ReflowMarginMatches(fz_rect box, u64 hash, const Vec<ReflowMarginRef>& refs, int width = 0,
+                                int height = 0) {
+    for (const auto& ref : refs) {
+        if (ref.hash != hash || ref.width != width || ref.height != height) continue;
+        constexpr float tolerance = .025f;
+        if (fabsf(ref.box.x0 - box.x0) <= tolerance && fabsf(ref.box.x1 - box.x1) <= tolerance &&
+            fabsf(ref.box.y0 - box.y0) <= tolerance && fabsf(ref.box.y1 - box.y1) <= tolerance)
+            return true;
+    }
+    return false;
+}
+
+struct ReflowPart {
+    fz_stext_block* block;
+    fz_rect box;
+    ReflowRegion region = ReflowRegion::Body;
+    fz_stext_line* line = nullptr;
+    fz_stext_char* first = nullptr;
+    fz_stext_char* last = nullptr;
+};
+
+static void ReflowMarginParts(fz_stext_block* block, ReflowRegion region, Vec<ReflowPart>& parts) {
+    for (auto* line = block->u.t.first_line; line; line = line->next) {
+        auto* first = line->first_char;
+        fz_rect box = fz_empty_rect;
+        for (auto* ch = first; ch; ch = ch->next) {
+            box = fz_union_rect(box, fz_rect_from_quad(ch->quad));
+            // Separate widely spaced footer columns even when MuPDF made one line.
+            auto* next = ch->next;
+            if (next && next->quad.ul.x - ch->quad.ur.x <= fmaxf(ch->size, next->size) * 2.5f) continue;
+            VecAppend(parts, ReflowPart{block, box, region, line, first, ch});
+            first = next;
+            box = fz_empty_rect;
+        }
+    }
+}
+
+static bool AddReflowMarginParts(fz_stext_block* block, fz_rect media, const Vec<ReflowMarginRef>& refs,
+                                 Vec<ReflowPart>& parts) {
+    fz_rect box = ReflowUnitBox(block->bbox, media);
+    ReflowRegion region = ReflowMargin(box);
+    if (region == ReflowRegion::Body) return false;
+    if (block->type == FZ_STEXT_BLOCK_TEXT) {
+        for (auto* line = block->u.t.first_line; line; line = line->next) {
+            if (!ReflowMarginMatches(ReflowUnitBox(line->bbox, media), ReflowMarginHash(line), refs)) return false;
+        }
+        ReflowMarginParts(block, region, parts);
+        return true;
+    }
+    if (block->type == FZ_STEXT_BLOCK_IMAGE) {
+        auto* image = block->u.i.image;
+        if (!ReflowMarginMatches(box, 0, refs, image->w, image->h)) return false;
+        VecAppend(parts, ReflowPart{block, block->bbox, region});
+        return true;
+    }
+    if (block->type != FZ_STEXT_BLOCK_STRUCT || !block->u.s.down || block->u.s.down->standard == FZ_STRUCTURE_TABLE)
+        return false;
+    Vec<ReflowPart> nested;
+    for (auto* child = block->u.s.down->first_block; child; child = child->next) {
+        if (child->type == FZ_STEXT_BLOCK_VECTOR || child->type == FZ_STEXT_BLOCK_GRID) continue;
+        if (!AddReflowMarginParts(child, media, refs, nested)) return false;
+    }
+    for (const auto& part : nested) VecAppend(parts, part);
+    return true;
+}
+
+static void ReflowPageParts(fz_stext_page* page, const Vec<ReflowMarginRef>& refs, Vec<ReflowPart>& parts) {
+    for (auto* block = page->first_block; block; block = block->next) {
+        if (AddReflowMarginParts(block, page->mediabox, refs, parts)) continue;
+        if (block->type == FZ_STEXT_BLOCK_TEXT || block->type == FZ_STEXT_BLOCK_IMAGE ||
+            block->type == FZ_STEXT_BLOCK_STRUCT)
+            VecAppend(parts, ReflowPart{block, block->bbox});
+    }
+}
+
+static void ReflowTableMargins(fz_stext_block* block, fz_rect media, const Vec<ReflowMarginRef>& refs,
+                               Vec<ReflowPart>& parts, bool inTable = false) {
+    for (; block; block = block->next) {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down) {
+            auto* structure = block->u.s.down;
+            ReflowTableMargins(structure->first_block, media, refs, parts,
+                               inTable || structure->standard == FZ_STRUCTURE_TABLE);
+        } else if (inTable) {
+            AddReflowMarginParts(block, media, refs, parts);
+        }
+    }
+}
+
+static bool ReflowClipKeepsBody(fz_stext_block* block, fz_rect media, const Vec<ReflowMarginRef>& refs, fz_rect clip) {
+    for (; block; block = block->next) {
+        if (block->type == FZ_STEXT_BLOCK_STRUCT && block->u.s.down) {
+            if (!ReflowClipKeepsBody(block->u.s.down->first_block, media, refs, clip)) return false;
+        } else if (block->type == FZ_STEXT_BLOCK_TEXT) {
+            for (auto* line = block->u.t.first_line; line; line = line->next) {
+                if (line->bbox.y0 >= clip.y0 && line->bbox.y1 <= clip.y1) continue;
+                if (!ReflowMarginMatches(ReflowUnitBox(line->bbox, media), ReflowMarginHash(line), refs)) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void WriteReflowPart(fz_context* ctx, fz_output* output, fz_stext_page* page, const ReflowPart& part) {
+    auto box = part.box;
+    fz_write_printf(ctx, output, "<div data-source-box=\"%g,%g,%g,%g\">\n", box.x0, box.y0, box.x1 - box.x0,
+                    box.y1 - box.y0);
+    fz_stext_block block = *part.block;
+    block.next = block.prev = nullptr;
+    block.bbox = box;
+    fz_stext_line line{};
+    fz_stext_char* next = nullptr;
+    if (part.line) {
+        line = *part.line;
+        line.next = line.prev = nullptr;
+        line.first_char = part.first;
+        line.last_char = part.last;
+        line.bbox = box;
+        block.u.t.first_line = block.u.t.last_line = &line;
+        next = part.last->next;
+        part.last->next = nullptr;
+    }
+    fz_stext_page single = *page;
+    single.first_block = single.last_block = &block;
+    fz_try(ctx) {
+        fz_print_stext_page_as_xhtml(ctx, output, &single, 0);
+    }
+    fz_always(ctx) {
+        if (part.last) part.last->next = next;
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+    fz_write_printf(ctx, output, "</div>\n");
+}
+
+static void WriteReflowRegion(fz_context* ctx, fz_output* output, fz_stext_page* page, const Vec<ReflowPart>& parts,
+                              ReflowRegion region) {
+    bool found = false;
+    for (const auto& part : parts)
+        if (part.region == region) found = true;
+    if (!found) return;
+    fz_write_printf(ctx, output, "<div data-page-region=\"%s\">\n",
+                    region == ReflowRegion::Header ? "header" : "footer");
+    const char* alignments[] = {"left", "center", "right"};
+    for (int column = 0; column < 3; column++) {
+        fz_write_printf(ctx, output, "<div data-source-align=\"%s\">\n", alignments[column]);
+        for (const auto& part : parts) {
+            if (part.region != region) continue;
+            auto box = ReflowUnitBox(part.box, page->mediabox);
+            float center = (box.x0 + box.x1) * .5f;
+            int alignment = center < .35f ? 0 : center > .65f ? 2 : 1;
+            if (alignment == column) WriteReflowPart(ctx, output, page, part);
         }
         fz_write_printf(ctx, output, "</div>\n");
     }
+    fz_write_printf(ctx, output, "</div>\n");
+}
+
+static void WriteReflowBlocks(fz_context* ctx, fz_output* output, fz_stext_page* page, int pageNo,
+                              const Vec<ReflowMarginRef>& refs, const Vec<ReflowPart>& tableMargins) {
+    Vec<ReflowPart> parts;
+    ReflowPageParts(page, refs, parts);
+    for (const auto& part : tableMargins) VecAppend(parts, part);
+    fz_write_printf(ctx, output, "<div id=\"page%d\">\n", pageNo);
+    WriteReflowRegion(ctx, output, page, parts, ReflowRegion::Header);
+    for (const auto& part : parts)
+        if (part.region == ReflowRegion::Body) WriteReflowPart(ctx, output, page, part);
+    WriteReflowRegion(ctx, output, page, parts, ReflowRegion::Footer);
     fz_write_printf(ctx, output, "</div>\n");
 }
 
@@ -9041,12 +9267,17 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
     ScopedMutex renderScope(&renderLock);
     ScopedRecursiveMutex docScope(&docLock);
     fz_stext_page* text = nullptr;
+    fz_stext_page* original = nullptr;
     fz_buffer* buffer = nullptr;
     fz_output* output = nullptr;
     fz_var(text);
+    fz_var(original);
     fz_var(buffer);
     fz_var(output);
     fz_var(result);
+    Vec<ReflowMarginRef> marginRefs;
+    Vec<ReflowPart> tableMargins;
+    ReflowNeighborMargins(this, pageNo, marginRefs);
     fz_try(ctx) {
         FzPageInfo* page = GetFzPageInfoLocked(this, LocationFromPageNo(pageNo), true, nullptr);
         if (!page || !page->page) {
@@ -9058,6 +9289,25 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         if (result.displayText) opts.flags |= FZ_STEXT_ACCURATE_BBOXES;
         text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
         if (result.displayText) FixReflowBlankGlyphs(text->first_block);
+        ReflowTableMargins(text->first_block, text->mediabox, marginRefs, tableMargins);
+        if (len(tableMargins) > 0) {
+            fz_rect clip = text->mediabox;
+            for (const auto& part : tableMargins) {
+                if (part.region == ReflowRegion::Header) clip.y0 = fmaxf(clip.y0, part.box.y1 + 1);
+                if (part.region == ReflowRegion::Footer) clip.y1 = fminf(clip.y1, part.box.y0 - 1);
+            }
+            // A running header can be mistaken for a register-table row. Re-run
+            // layout without that edge text, retaining its original source nodes.
+            if (ReflowClipKeepsBody(text->first_block, text->mediabox, marginRefs, clip)) {
+                original = text;
+                text = nullptr;
+                opts.flags |= FZ_STEXT_CLIP_RECT;
+                opts.clip = clip;
+                text = NewStextPage(ctx, page->page, &opts, nullptr, StextRun::WholePage);
+                if (result.displayText) FixReflowBlankGlyphs(text->first_block);
+            } else
+                VecReset(tableMargins);
+        }
         RemoveReflowWatermarks(ctx, text->first_block, text->mediabox);
         if (!PreserveReflowVectors(ctx, page->page, text))
             fz_throw(ctx, FZ_ERROR_LIMIT, "This page contains too many separate drawings to reflow.");
@@ -9065,7 +9315,7 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         MergeReflowParagraphs(text);
         buffer = fz_new_buffer(ctx, 8192);
         output = fz_new_output(ctx, 8192, buffer, WriteReflowPage, nullptr, nullptr);
-        WriteReflowBlocks(ctx, output, text, pageNo);
+        WriteReflowBlocks(ctx, output, text, pageNo, marginRefs, tableMargins);
         fz_close_output(ctx, output);
         unsigned char* bytes = nullptr;
         size_t count = fz_buffer_storage(ctx, buffer, &bytes);
@@ -9078,6 +9328,7 @@ ReflowPageData EngineMupdf::ExtractReflowPage(int pageNo) {
         fz_drop_output(ctx, output);
         fz_drop_buffer(ctx, buffer);
         fz_drop_stext_page(ctx, text);
+        fz_drop_stext_page(ctx, original);
     }
     fz_catch(ctx) {
         FreeReflowPageData(&result);

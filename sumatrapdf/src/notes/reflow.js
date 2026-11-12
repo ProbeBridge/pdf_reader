@@ -9,6 +9,7 @@ let info,
   clickEnabled = true,
   zoom = 100,
   current = 1,
+  navigation = 0,
   epoch = 0,
   checking = false,
   navigating = false,
@@ -282,10 +283,11 @@ function clear() {
   hideActions();
   globalThis.CSS?.highlights?.delete("ai-notes");
 }
-async function navigate(page, target) {
+async function navigate(page, target, version = navigation) {
   if (!info || page < 1 || page > info.pageCount) return;
   clear();
   const token = epoch;
+  navigation = version;
   navigating = true;
   $("#pages").setAttribute("aria-busy", "true");
   try {
@@ -294,7 +296,7 @@ async function navigate(page, target) {
     $("#status").textContent = say("正在重排当前页…", "Reflowing this page…");
     const entry = await load(page, token);
     if (!entry || token !== epoch) return;
-    await call("position", { page });
+    await call("position", { page, navigation: version });
     if (token !== epoch) return;
     $("#status").textContent = "";
     scrollTo(0, 0);
@@ -332,7 +334,7 @@ async function checkScroll() {
     if (at && at.page !== current) {
       current = at.page;
       label();
-      await call("position", { page: current });
+      await call("position", { page: current, navigation });
     }
     prune();
     if (pages.size + pending.size < 5) {
@@ -570,7 +572,7 @@ addEventListener("reflowstate", (e) => {
   drawNotes();
 });
 addEventListener("reflowzoom", (e) => setZoom(e.detail.zoom, false));
-addEventListener("reflownavigate", (e) => navigate(e.detail.page, e.detail.center).catch(error));
+addEventListener("reflownavigate", (e) => navigate(e.detail.page, e.detail.center, e.detail.navigation).catch(error));
 addEventListener("reflowcapture", closeOriginal);
 addEventListener("reflowfocus", async (e) => {
   try {
@@ -592,7 +594,7 @@ try {
   clickEnabled = info.notes?.click !== false;
   zoom = info.zoom || 100;
   setZoom(zoom, false);
-  await navigate(info.page || 1, info.center);
+  await navigate(info.page || 1, info.center, info.navigation || 0);
 } catch (e) {
   error(e);
 }

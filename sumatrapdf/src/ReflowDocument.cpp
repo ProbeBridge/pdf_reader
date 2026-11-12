@@ -48,6 +48,7 @@ struct ReflowView : WebviewWnd {
     bool closing = false;
     int page = 1;
     int zoom = 100;
+    int navigation = 0;
     int pendingPages = 0;
     Str documentPath;
     ReflowCache* cache = nullptr;
@@ -401,8 +402,9 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
     int error = 0;
     if (str::Eq(action, StrL("ready"))) {
         view->ready = true;
-        result = fmt("{\"page\":%d,\"pageCount\":%d,\"zoom\":%d,\"notes\":%s,\"center\":%s}", view->page,
-                     view->engine->PageCount(), view->zoom, ContextNotesReflowState(win), CenterJson(view->center));
+        result = fmt("{\"page\":%d,\"pageCount\":%d,\"zoom\":%d,\"notes\":%s,\"center\":%s,\"navigation\":%d}",
+                     view->page, view->engine->PageCount(), view->zoom, ContextNotesReflowState(win),
+                     CenterJson(view->center), view->navigation);
     } else if (str::Eq(action, StrL("cache-info"))) {
         auto* cache = view->cache;
         if (cache) {
@@ -458,7 +460,10 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
         ContextNoteDelete(win, ReflowField(data, StrL("id")));
     } else if (str::Eq(action, StrL("position"))) {
         int page = atoi(CStrTemp(ReflowField(data, StrL("page"))));
-        if (page > 0 && page <= view->engine->PageCount() && page != view->page) {
+        // A queued scroll notification must not undo a newer TOC/page command.
+        if (win->AsFixed()->CurrentPageNo() != view->page) ReflowDocumentLayout(win);
+        int navigation = atoi(CStrTemp(ReflowField(data, StrL("navigation"))));
+        if (navigation == view->navigation && page > 0 && page <= view->engine->PageCount() && page != view->page) {
             view->page = page;
             win->AsFixed()->GoToPage(page, false);
             ScheduleUiUpdate(win, kUiToolbarDirty);
@@ -537,7 +542,8 @@ void ReflowDocumentLayout(MainWindow* win) {
     int page = dm->CurrentPageNo();
     if (view->page != page) {
         view->page = page;
-        ReflowEvent(view, StrL("reflownavigate"), fmt("{\"page\":%d}", page));
+        view->navigation++;
+        ReflowEvent(view, StrL("reflownavigate"), fmt("{\"page\":%d,\"navigation\":%d}", page, view->navigation));
     }
 }
 
@@ -578,8 +584,10 @@ bool ReflowDocumentHandleCommand(MainWindow* win, int cmdId) {
             ReflowDocumentUpdateNotes(win);
             // A toggle may have hidden the view while page extraction was in
             // flight. Restart its bounded page window when shown again.
-            ReflowEvent(view, StrL("reflownavigate"),
-                        fmt("{\"page\":%d,\"center\":%s}", view->page, CenterJson(center)));
+            view->navigation++;
+            ReflowEvent(
+                view, StrL("reflownavigate"),
+                fmt("{\"page\":%d,\"center\":%s,\"navigation\":%d}", view->page, CenterJson(center), view->navigation));
             view->Focus();
         }
         ToolbarUpdateStateForWindow(win, false);

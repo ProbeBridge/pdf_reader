@@ -102,6 +102,39 @@ main {
 .page-content h3 {
   font-size: 1.15em;
 }
+.page-content [data-page-region] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  gap: 0.75em;
+  align-items: center;
+  font-size: min(0.75em, 6vw);
+  line-height: 1.5;
+  padding-bottom: 0.7em;
+  margin-bottom: 1.25em;
+  border-bottom: 1px solid GrayText;
+}
+.page-content [data-page-region="footer"] {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 4fr) minmax(0, 1fr);
+  padding: 0.7em 0 0;
+  margin: 1.5em 0 0;
+  border: 0;
+  border-top: 1px solid GrayText;
+}
+.page-content [data-source-align="left"] {
+  text-align: left;
+}
+.page-content [data-source-align="center"] {
+  text-align: center;
+}
+.page-content [data-source-align="right"] {
+  text-align: right;
+}
+.page-content [data-page-region] p {
+  margin: 0;
+}
+.page-content [data-page-region] img {
+  margin: 0;
+}
 .page-content img {
   display: block;
   width: min(calc(var(--image-width, 100%) * var(--font-scale)), 100%);

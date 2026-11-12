@@ -159,6 +159,12 @@ export function makeReflowFixture(variant = "primary"): Buffer {
       if (y < 46 || y >= 114 || x < 26 || x >= 214)
         watermarkMask[y * 240 + x] = 255;
   const watermark = "q 504 0 0 336 54 240 cm /Watermark Do Q\n";
+  const furniture = (page: number) =>
+    text("HeaderRight", 510, 780, 8) +
+    text("HeaderLeft", 40, 780, 8) +
+    text(String(page), 550, 20, 8) +
+    text("FooterLeft", 40, 20, 8) +
+    text("Copyright Reader fixture", 260, 20, 8);
   const objects: (string | Buffer)[] = [
     "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>",
     "<< /Type /Pages /Kids [7 0 R 8 0 R 9 0 R] /Count 3 >>",
@@ -170,9 +176,9 @@ export function makeReflowFixture(variant = "primary"): Buffer {
       (content) =>
         `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> /XObject << /Picture 4 0 R /Heavy 5 0 R /Watermark 16 0 R >> >> /Contents ${content} 0 R >>`,
     ),
-    stream(watermark + first),
-    stream(watermark + second),
-    stream(watermark + third),
+    stream(watermark + first + furniture(1)),
+    stream(watermark + second + furniture(2)),
+    stream(watermark + third + furniture(3)),
     "<< /Title (Overview) /Parent 6 0 R /Next 14 0 R /Dest [7 0 R /XYZ null null 0] >>",
     "<< /Title (Register map) /Parent 6 0 R /Prev 13 0 R /Next 15 0 R /Dest [8 0 R /XYZ null null 0] >>",
     "<< /Title (Cleanup) /Parent 6 0 R /Prev 14 0 R /Dest [9 0 R /XYZ null null 0] >>",

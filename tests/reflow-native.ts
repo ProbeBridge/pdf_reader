@@ -422,6 +422,7 @@ try {
   );
   panel = await pageFor("sumatra-notes/index.html");
   await panel.locator("#cards").waitFor();
+  await panel.waitForFunction(() => !!(window as any).chrome?.storage?.local);
   await panel.evaluate(async (port: number) => {
     await (window as any).chrome.storage.local.set({
       settings: {
@@ -465,6 +466,7 @@ try {
   await traceFlow(flow);
   await waitPage(flow, 1, "first enable");
   await checkReflowSwitch(true);
+  const firstNavigation = (await nativeCall(flow, "ready")).navigation;
   const exported: any = await nativeCall(flow, "page", { page: 1 });
   writeFileSync(join(output, "actual-page1.xhtml"), exported.html || "");
   writeFileSync(
@@ -472,6 +474,42 @@ try {
     exported.sourceText || "",
   );
   assert.equal(exported.error, "");
+  const regions = await flow.evaluate(() => {
+    const content = document.querySelector(
+      '.source-page[data-page="1"] .page-content',
+    )!;
+    const header = content.querySelector('[data-page-region="header"]');
+    const footer = content.querySelector('[data-page-region="footer"]');
+    return {
+      header: header?.textContent?.replace(/\s+/g, " ").trim(),
+      footer: footer?.textContent?.replace(/\s+/g, " ").trim(),
+      body: [...content.querySelectorAll("h1,h2,h3,p")]
+        .filter((element) => !element.closest("[data-page-region]"))
+        .map((element) => element.textContent)
+        .join(" "),
+    };
+  });
+  report.regions = regions;
+  assert.ok(
+    regions.header?.includes("HeaderLeft") &&
+      regions.header.includes("HeaderRight"),
+    "repeated page headers must be isolated above the body",
+  );
+  assert.match(
+    regions.footer || "",
+    /FooterLeft.*Copyright Reader fixture.*1/,
+    "the footer's left label, centered copyright and right page number must stay together below the body",
+  );
+  assert.match(
+    regions.body,
+    /Reflow primary document/,
+    "a unique title near the page edge must remain a body heading",
+  );
+  assert.ok(
+    !/HeaderLeft|HeaderRight|FooterLeft|Copyright Reader fixture/.test(
+      regions.body,
+    ),
+  );
   assert.match(
     exported.html,
     /<table[\s>]/,
@@ -557,6 +595,12 @@ try {
   mark("TOC sidebar navigation to source page 2");
   await app.client.tocSidebarNav(2);
   await waitPage(flow, 2, "TOC sidebar");
+  await nativeCall(flow, "position", { page: 1, navigation: firstNavigation });
+  assert.equal(
+    (await app.client.chapterInfo()).page,
+    2,
+    "a stale scroll report must not undo a newer TOC navigation",
+  );
   const register: any = await nativeCall(flow, "page", { page: 2 });
   writeFileSync(join(output, "actual-page2.xhtml"), register.html || "");
   assert.match(
