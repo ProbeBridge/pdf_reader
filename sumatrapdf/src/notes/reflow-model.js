@@ -23,6 +23,7 @@ export function safeReflowContent(html, owner = document) {
         continue;
       }
       const element = owner.createElement(tag);
+      if (tag === "ul" && child.getAttribute("data-source-list") === "true") element.dataset.sourceList = "true";
       if (tag === "div") {
         if (child.getAttribute("data-source-heading") === "true") element.dataset.sourceHeading = "true";
         const box = (child.getAttribute("data-source-box") || "").split(",").map(Number);

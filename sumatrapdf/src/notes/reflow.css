@@ -120,6 +120,28 @@ main {
 .page-content [data-source-heading] :is(p, h1, h2, h3, h4, h5, h6) {
   margin: 0;
 }
+.page-content ul[data-source-list] {
+  list-style: none;
+  padding: 0;
+  margin: 0.5em 0 1em;
+}
+.page-content [data-source-list] > li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7em;
+  margin: 0.5em 0;
+}
+.page-content [data-source-list] > li > div:first-child {
+  flex: 0 0 auto;
+}
+.page-content [data-source-list] > li > div:last-child {
+  flex: 1 1 auto;
+}
+.page-content [data-source-list] > li div div,
+.page-content [data-source-list] p {
+  display: inline;
+  margin: 0;
+}
 .page-content [data-page-region] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);

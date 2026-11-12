@@ -162,6 +162,76 @@ try {
       codepoints: source.length,
     };
     report.pages.push(result);
+    if (number === 1202 && args.includes("--features")) {
+      result.features = await flow.evaluate(() => {
+        const content = document.querySelector(
+          '.source-page[data-page="1202"] .page-content',
+        )!;
+        return {
+          tables: content.querySelectorAll("table").length,
+          items: [...content.querySelectorAll("li")].map((item) =>
+            item.textContent?.replace(/\s+/g, " ").trim(),
+          ),
+        };
+      });
+      assert.equal(
+        result.features.tables,
+        0,
+        "the GMAC feature bullets are a list, not a two-column table",
+      );
+      assert.equal(result.features.items.length, 21);
+      assert.match(result.features.items[0], /^•\s*Supports 10\/100\/1000Mbps/);
+      assert.match(result.features.items[5], /packet\s+timestamping/);
+      assert.match(result.features.items[6], /up to\s+16 KB/);
+      assert.match(result.features.items[12], /CPU\s+intervention:/);
+      assert.match(result.features.items[20], /Supports Split Header/);
+      const compact = (text: string) => text.replace(/\s+/g, "");
+      const expected = display.join("").slice(display.join("").indexOf("•"));
+      assert.equal(
+        compact(result.features.items.join("")),
+        compact(expected),
+        "all features and continuation lines must retain their original order",
+      );
+      result.featureLayout = [];
+      for (const zoom of [100, 400]) {
+        sendCommandSync(app.frame, cmdId(`CmdZoom${zoom}`));
+        await flow.waitForFunction(
+          (zoom: number) =>
+            document
+              .querySelector("#page-label")
+              ?.textContent?.includes(`${zoom}%`),
+          zoom,
+        );
+        await flow
+          .locator('.source-page[data-page="1202"] li')
+          .first()
+          .scrollIntoViewIfNeeded();
+        await settle();
+        const layout = await flow.evaluate(() => {
+          const item = document.querySelector(
+            '.source-page[data-page="1202"] li',
+          )!;
+          const text = item.lastElementChild!;
+          const first = text.querySelector("p")!.getBoundingClientRect();
+          const marker = item
+            .firstElementChild!.querySelector("p")!
+            .getBoundingClientRect();
+          return {
+            baseline: Math.abs(first.top - marker.top),
+            overflow:
+              document.documentElement.scrollWidth -
+              document.documentElement.clientWidth,
+          };
+        });
+        result.featureLayout.push({ zoom, ...layout });
+        assert.ok(
+          layout.baseline < 2,
+          "list markers must stay beside their feature text",
+        );
+        assert.ok(layout.overflow <= 1);
+        await flow.screenshot({ path: join(output, `features-${zoom}.png`) });
+      }
+    }
     if (number === 341 && args.includes("--headings")) {
       result.headingLayout = [];
       for (const zoom of [100, 400]) {
@@ -364,6 +434,14 @@ try {
       { number, sourceText: page.sourceText, displayText: page.displayText },
     );
     result.ui = ui;
+    if (args.includes("--features") && [1203, 1205].includes(number)) {
+      assert.equal(
+        ui.tables,
+        number === 1203 ? 1 : 3,
+        "the adjacent real GMAC table must remain a table",
+      );
+      assert.equal(ui.cells, number === 1203 ? 6 : 49);
+    }
     if (args.includes("--page-regions")) {
       writeFileSync(
         join(output, `page${number}-dom.html`),

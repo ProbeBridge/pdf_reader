@@ -9330,6 +9330,95 @@ static void WriteReflowPart(fz_context* ctx, fz_output* output, fz_stext_page* p
     fz_write_printf(ctx, output, "</div>\n");
 }
 
+enum class ReflowCellKind {
+    Empty,
+    Marker,
+    Text,
+    Other
+};
+
+static ReflowCellKind ReflowListCell(fz_stext_block* cell) {
+    if (!cell || cell->type != FZ_STEXT_BLOCK_STRUCT || !cell->u.s.down || cell->u.s.down->standard != FZ_STRUCTURE_TD)
+        return ReflowCellKind::Other;
+    int count = 0, first = 0;
+    for (auto* block = cell->u.s.down->first_block; block; block = block->next) {
+        if (block->type != FZ_STEXT_BLOCK_TEXT) return ReflowCellKind::Other;
+        for (auto* line = block->u.t.first_line; line; line = line->next) {
+            if (line->wmode || line->dir.x < .99f || fabsf(line->dir.y) > .01f) return ReflowCellKind::Other;
+            for (auto* ch = line->first_char; ch; ch = ch->next) {
+                if (ch->c == ' ' || ch->c == '\t') continue;
+                if (count == 0) first = ch->c;
+                if (count < 2) count++;
+            }
+        }
+    }
+    if (count == 0) return ReflowCellKind::Empty;
+    if (count == 1 && (first == 0x2022 || first == 0x25cf || first == 0x25aa || first == 0xf06c))
+        return ReflowCellKind::Marker;
+    return ReflowCellKind::Text;
+}
+
+static bool ReflowBulletTable(fz_stext_block* block) {
+    if (block->type != FZ_STEXT_BLOCK_STRUCT || !block->u.s.down || block->u.s.down->standard != FZ_STRUCTURE_TABLE)
+        return false;
+    // Only inferred, unruled two-column grids whose first column contains
+    // nothing but bullets are lists. Keep tagged and ruled tables intact.
+    auto* grid = block->u.s.down->first_block;
+    if (!grid || grid->type != FZ_STEXT_BLOCK_GRID || !grid->u.b.xs || grid->u.b.xs->len != 3 || !grid->u.b.info)
+        return false;
+    auto* info = grid->u.b.info;
+    for (int i = 0; i < info->w * info->h; i++) {
+        if (info->info[i].flags & (FZ_STEXT_GRID_L_BORDER | FZ_STEXT_GRID_T_BORDER)) return false;
+    }
+    int markers = 0;
+    for (auto* row = grid->next; row; row = row->next) {
+        if (row->type != FZ_STEXT_BLOCK_STRUCT || !row->u.s.down || row->u.s.down->standard != FZ_STRUCTURE_TR)
+            return false;
+        auto* cell = row->u.s.down->first_block;
+        auto kind = ReflowListCell(cell);
+        if (kind == ReflowCellKind::Other || !cell) return false;
+        if (!cell->next) {
+            // The hunter can absorb the introductory prose as spanning rows.
+            if (markers || kind != ReflowCellKind::Text || cell->bbox.x0 > grid->bbox.x0 + 1 ||
+                cell->bbox.x1 < grid->bbox.x1 - 1)
+                return false;
+            continue;
+        }
+        if (cell->next->next || ReflowListCell(cell->next) != ReflowCellKind::Text) return false;
+        if (kind == ReflowCellKind::Marker)
+            markers++;
+        else if (kind != ReflowCellKind::Empty || !markers)
+            return false;
+    }
+    return markers >= 2;
+}
+
+static void WriteReflowCell(fz_context* ctx, fz_output* output, fz_stext_page* page, fz_stext_block* cell) {
+    for (auto* block = cell->u.s.down->first_block; block; block = block->next)
+        WriteReflowPart(ctx, output, page, ReflowPart{block, block->bbox});
+}
+
+static void WriteReflowList(fz_context* ctx, fz_output* output, fz_stext_page* page, fz_stext_block* table) {
+    bool started = false;
+    for (auto* row = table->u.s.down->first_block->next; row; row = row->next) {
+        auto* cell = row->u.s.down->first_block;
+        if (!cell->next) {
+            WriteReflowCell(ctx, output, page, cell);
+            continue;
+        }
+        if (ReflowListCell(cell) == ReflowCellKind::Marker) {
+            fz_write_printf(ctx, output, started ? "</div></li>\n" : "<ul data-source-list=\"true\">\n");
+            fz_write_printf(ctx, output, "<li><div>\n");
+            WriteReflowCell(ctx, output, page, cell);
+            fz_write_printf(ctx, output, "</div><div>\n");
+            started = true;
+        }
+        // Continuation rows belong to the preceding item and wrap as prose.
+        WriteReflowCell(ctx, output, page, cell->next);
+    }
+    fz_write_printf(ctx, output, "</div></li></ul>\n");
+}
+
 static void WriteReflowRegion(fz_context* ctx, fz_output* output, fz_stext_page* page, const Vec<ReflowPart>& parts,
                               ReflowRegion region) {
     bool found = false;
@@ -9363,6 +9452,10 @@ static void WriteReflowBlocks(fz_context* ctx, fz_output* output, fz_stext_page*
     for (int i = 0; i < len(parts); i++) {
         const auto& part = parts[i];
         if (part.region != ReflowRegion::Body) continue;
+        if (ReflowBulletTable(part.block)) {
+            WriteReflowList(ctx, output, page, part.block);
+            continue;
+        }
         bool pair = i + 1 < len(parts) && ReflowHeadingPair(part, parts[i + 1]);
         bool heading = pair || ReflowSingleHeading(part);
         if (heading) fz_write_printf(ctx, output, "<div data-source-heading=\"true\">\n");
