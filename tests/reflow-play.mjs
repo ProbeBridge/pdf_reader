@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { extname, resolve, sep } from "node:path";
 import { chromium } from "playwright";
 
 const root = resolve("sumatrapdf/src/notes");
@@ -20,7 +20,7 @@ const server = createServer(async (req, res) => {
       root,
       "." + new URL(req.url, "http://localhost").pathname,
     );
-    if (!path.startsWith(root + "/")) throw new Error("Invalid path");
+    if (!path.startsWith(root + sep)) throw new Error("Invalid path");
     const bytes = await readFile(path);
     res.writeHead(200, {
       "content-type":

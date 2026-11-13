@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { resolve, extname } from "node:path";
+import { resolve, extname, sep } from "node:path";
 import { chromium } from "playwright";
 
 const assets = resolve("sumatrapdf/src/notes");
@@ -18,7 +18,7 @@ const server = createServer(async (req, res) => {
       assets,
       "." + new URL(req.url, "http://localhost").pathname,
     );
-    if (!path.startsWith(assets + "/")) throw new Error("Invalid asset path");
+    if (!path.startsWith(assets + sep)) throw new Error("Invalid asset path");
     const types = {
       ".html": "text/html",
       ".js": "text/javascript",

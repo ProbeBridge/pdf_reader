@@ -57,7 +57,7 @@ writeFileSync(secondFile, makeReflowFixture("secondary"));
 mkdirSync(data);
 writeFileSync(
   join(data, "SumatraPDF-settings.txt"),
-  `RestoreSession = false\nCheckForUpdates = false\nShowToc = true\nSidebarDx = 210\nShowStartPage = true\nRememberOpenedFiles = true\nUseTabs = true\nDefaultZoom = 200\nScrollbars = ${scrollMode}\n`,
+  `FollowSystemLanguage = false\nUiLanguage = cn\nRestoreSession = false\nCheckForUpdates = false\nShowToc = true\nSidebarDx = 210\nShowStartPage = true\nRememberOpenedFiles = true\nUseTabs = true\nDefaultZoom = 200\nScrollbars = ${scrollMode}\n`,
 );
 const calls: any[] = [],
   report: any = { output, pdf: firstFile, milestones: [] };
