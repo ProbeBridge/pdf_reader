@@ -20,6 +20,7 @@ $markerPath = Join-Path $InstallPath 'install-info.json'
 $binaries = @('SumatraPDF.exe', 'libsumatrapdf.dll', 'PdfFilter.dll', 'PdfPreview.dll', 'sumatrapdf-tool.exe')
 $requiredAssets = @(
     'theme.css', 'theme.js',
+    'library.css', 'library.js', 'library-model.js',
     'reading-stats.css', 'reading-stats.js', 'reading-stats-model.js',
     'index.html', 'notes.css', 'notes.js', 'bridge.js', 'icons.js', 'network.js', 'note-store.js',
     'history.html', 'history.css', 'history.js', 'history-model.js',

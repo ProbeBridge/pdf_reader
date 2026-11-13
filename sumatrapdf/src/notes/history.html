@@ -15,8 +15,8 @@
         ><input id="search" type="search" placeholder="搜索阅读历史" aria-label="搜索阅读历史" autofocus /><kbd
           >Ctrl F</kbd
         ></label
-      ><button id="open">打开文件</button><button id="statistics" type="button" aria-pressed="false">阅读统计</button
-      ><button id="notes">AI 注释</button
+      ><button id="open">打开文件</button><button id="library" type="button" aria-pressed="false">书库</button
+      ><button id="statistics" type="button" aria-pressed="false">阅读统计</button><button id="notes">AI 注释</button
       ><button type="button" data-theme-toggle title="切换主题" aria-label="切换主题">☾</button>
     </header>
     <div class="layout">
@@ -24,6 +24,7 @@
         <h1>阅读历史</h1>
         <p>按时间浏览读过的文档</p>
         <nav class="history-navigation" aria-label="阅读页面">
+          <button id="library-tab" type="button" class="view-tab" aria-pressed="false">▤　书库</button>
           <button id="history-tab" type="button" class="view-tab selected" aria-pressed="true">◷　阅读历史</button>
           <button id="stats-tab" type="button" class="view-tab" aria-pressed="false">▥　阅读统计</button>
         </nav>
@@ -39,6 +40,7 @@
           <div id="empty" hidden>还没有阅读记录。打开一份文档，开始阅读。</div>
         </section>
         <section id="stats-panel" hidden></section>
+        <section id="library-panel" hidden></section>
       </main>
     </div>
     <div id="toast" role="status" hidden></div>

@@ -7,6 +7,7 @@
 #include "base/Base.h"
 #endif
 #include "base/File.h"
+#include "base/GuessFileType.h"
 #include "base/Win.h"
 #include "base/JsonParser.h"
 #include "base/Crypto.h"
@@ -14,6 +15,11 @@
 #if OS_WIN
 #include <wincrypt.h>
 #include <commdlg.h>
+#if !defined(SUMATRA_NG)
+#include <shobjidl.h>
+#include "base/AutoWin.h"
+#include "OpenFileFilters.h"
+#endif
 #else
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -42,6 +48,7 @@
 #include "AppTools.h"
 #include "DocController.h"
 #include "EngineBase.h"
+#include "EngineAll.h"
 #include "DisplayModel.h"
 #include "TextSelection.h"
 #include "SumatraPDF.h"
@@ -402,6 +409,7 @@ static void BroadcastStore(Str key, Str value) {
     for (MainWindow* win : gWindows) {
         if (win->contextNotes) {
             DispatchNotes(win->contextNotes->panel, StrL("storechange"), change);
+            DispatchNotes(win->contextNotes->history, StrL("storechange"), change);
         }
     }
 }
@@ -803,7 +811,67 @@ static void GoToNote(MainWindow* win, Str id) {
     }
 }
 
+static TempStr ReadingLibraryJson() {
+    NotesStoreGuard guard;
+    if (!guard.locked) return {};
+    LoadNotesStore(NotesStoreLoad::Refresh);
+    if (gStoreFailed) return {};
+    str::Builder b;
+    b.AppendChar('[');
+    bool comma = false;
+    for (int i = 0; i < len(gStoreKeys); i++) {
+        if (!str::StartsWith(gStoreKeys[i], StrL("library:"))) continue;
+        Str path = JsonField(gStoreValues[i], StrL("path"));
+        if (len(path) == 0) continue;
+        if (comma) b.AppendChar(',');
+        b.Append(fmt("{\"key\":%s,\"book\":%s,\"missing\":%s}", JsonQuote(gStoreKeys[i]), gStoreValues[i],
+                     file::Exists(path) ? StrL("false") : StrL("true")));
+        comma = true;
+    }
+    b.AppendChar(']');
+    return ToStrTemp(b);
+}
+
+static bool IsLibraryPath(Str path) {
+    NotesStoreGuard guard;
+    if (!guard.locked) return false;
+    LoadNotesStore(NotesStoreLoad::Refresh);
+    if (gStoreFailed) return false;
+    for (int i = 0; i < len(gStoreKeys); i++) {
+        if (str::StartsWith(gStoreKeys[i], StrL("library:")) && str::Eq(JsonField(gStoreValues[i], StrL("path")), path))
+            return true;
+    }
+    return false;
+}
+
 #if !defined(SUMATRA_NG)
+static bool NotesPickBooks(MainWindow* win, StrVec* paths) {
+    AutoReleaseComPtr<IFileOpenDialog> dlg;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))) || !dlg)
+        return false;
+    DWORD options = 0;
+    dlg->GetOptions(&options);
+    dlg->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_FILEMUSTEXIST | FOS_ALLOWMULTISELECT);
+    OpenFileFilterList filters;
+    BuildOpenFileFilters(filters);
+    dlg->SetFileTypes((UINT)len(filters.specs), VecData(filters.specs));
+    dlg->SetFileTypeIndex(1);
+    if (FAILED(dlg->Show(NotesFrame(win)))) return false;
+    AutoReleaseComPtr<IShellItemArray> items;
+    if (FAILED(dlg->GetResults(&items)) || !items) return false;
+    DWORD count = 0;
+    items->GetCount(&count);
+    for (DWORD i = 0; i < count; i++) {
+        AutoReleaseComPtr<IShellItem> item;
+        PWSTR path = nullptr;
+        if (SUCCEEDED(items->GetItemAt(i, &item)) && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+            paths->Append(ToUtf8Temp(WStr(path)));
+            CoTaskMemFree(path);
+        }
+    }
+    return true;
+}
+
 static bool SaveNotesExport(MainWindow* win, Str value) {
     WCHAR file[MAX_PATH] = L"SumatraPDF-notes.json";
     OPENFILENAMEW ofn{};
@@ -819,6 +887,35 @@ static bool SaveNotesExport(MainWindow* win, Str value) {
     return GetSaveFileNameW(&ofn) && file::WriteFile(ToUtf8Temp(WStr(file)), copy);
 }
 #endif
+
+struct LibraryPickTask {
+    MainWindow* win;
+    NotesView* view;
+    Str id;
+};
+
+static void PickLibraryBooks(LibraryPickTask* task) {
+    AutoFree<char> freeId(task->id.s);
+    MainWindow* win = task->win;
+    NotesView* view = task->view;
+    Str id = task->id;
+    delete task;
+    if (!VecContains(gWindows, win) || !win->contextNotes || win->contextNotes->history != view) return;
+    StrVec paths;
+    if (CanAccessDisk() && !gPluginMode) NotesPickBooks(win, &paths);
+    if (!VecContains(gWindows, win) || !win->contextNotes || win->contextNotes->history != view) return;
+    str::Builder result;
+    result.AppendChar('[');
+    bool comma = false;
+    for (Str path : paths) {
+        if (!file::Exists(path) || !IsSupportedFileType(GuessFileTypeFromName(path, true), true)) continue;
+        if (comma) result.AppendChar(',');
+        result.Append(fmt("{\"path\":%s,\"name\":%s}", JsonQuote(path), JsonQuote(path::GetBaseNameTemp(path))));
+        comma = true;
+    }
+    result.AppendChar(']');
+    view->Resolve(id, 0, ToStr(result));
+}
 
 static void NotesCall(void* ctx, Str id, Str method, Str params) {
     auto* view = (NotesView*)ctx;
@@ -868,6 +965,16 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
     } else if (str::Eq(action, StrL("history"))) {
         view->ready = true;
         result = ReadingHistoryJson();
+    } else if (str::Eq(action, StrL("library"))) {
+        view->ready = true;
+        result = ReadingLibraryJson();
+        if (len(result) == 0) {
+            error = 1;
+            result = JsonQuote(StrL("Cannot read the local library. Existing data has been preserved."));
+        }
+    } else if (str::Eq(action, StrL("libraryPicker"))) {
+        uitask::Post(MkFunc0(PickLibraryBooks, new LibraryPickTask{win, view, str::Dup(id)}), "LibraryPicker");
+        return;
     } else if (str::Eq(action, StrL("read"))) {
         NotesStoreGuard guard;
         if (guard.locked) {
@@ -965,8 +1072,13 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
         NotesPostCommand(win, CmdOpenFile);
     } else if (str::Eq(action, StrL("open"))) {
         Str path = JsonField(data, StrL("path"));
-        if (FileHistoryFindByPath(path)) {
-            LoadDocument(win, path);
+        if (FileHistoryFindByPath(path) || IsLibraryPath(path)) {
+            if (!file::Exists(path)) {
+                error = 1;
+                result = JsonQuote(StrL("The file has moved or is unavailable. Add it again from its new location."));
+            } else {
+                LoadDocument(win, path);
+            }
         }
     } else if (str::Eq(action, StrL("hideHistory")) || str::Eq(action, StrL("restoreHistory"))) {
         FileState* fs = FileHistoryFindByPath(JsonField(data, StrL("path")));

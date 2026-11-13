@@ -45,6 +45,9 @@ bool NotesCopy(MainWindow* win, Str text) {
     CopyTextToClipboard(win, text);
     return true;
 }
+bool NotesPickBooks(MainWindow* win, StrVec* paths) {
+    return AppShellPromptForFiles(win, {}, paths);
+}
 void NotesExecute(MainWindow* win, int cmd) {
     ExecuteCmd(win, cmd);
 }

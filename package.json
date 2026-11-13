@@ -27,6 +27,7 @@
     "test:home": "bun tests/notes-home-thumbnails.ts",
     "test:reflow": "node tests/reflow-browser.mjs && node tests/reflow-anchor.mjs",
     "test:theme": "node tests/notes-theme.mjs",
+    "test:library": "node tests/library-browser.mjs",
     "test:stats": "node tests/reading-stats.mjs",
     "test:reader-native": "bun tests/reader-features-native.ts",
     "build:mac": "node scripts/build-mac.mjs",

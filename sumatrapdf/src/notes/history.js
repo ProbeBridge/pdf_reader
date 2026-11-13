@@ -1,29 +1,47 @@
 import { native, node, button, text, toast, showError, zh } from "./bridge.js";
 import { dayKey, historyGroups } from "./history-model.js";
 import { createReadingStats } from "./reading-stats.js";
+import { createLibrary } from "./library.js";
 const $ = (s) => document.querySelector(s);
 let entries = [];
-let statsVisible = false;
+let currentView = "history";
+const queries = { history: "", library: "" };
 const statsView = createReadingStats($("#stats-panel"));
-function showStats(visible) {
-  statsVisible = visible;
-  $("aside h1").textContent = visible ? text("阅读统计", "Reading statistics") : text("阅读历史", "Reading history");
-  $("aside p").textContent = visible
-    ? text("页数、注释数与阅读时间", "Pages, annotations and reading time")
-    : text("按时间浏览读过的文档", "Documents you have opened");
-  $("#history-panel").hidden = visible;
-  $("#stats-panel").hidden = !visible;
-  $(".search").hidden = visible;
-  $("#statistics").textContent = visible ? text("阅读历史", "Reading history") : text("阅读统计", "Statistics");
-  for (const [id, selected] of [
-    ["statistics", visible],
-    ["stats-tab", visible],
-    ["history-tab", !visible],
-  ]) {
-    $("#" + id).setAttribute("aria-pressed", String(selected));
-    if (id !== "statistics") $("#" + id).classList.toggle("selected", selected);
+const libraryView = createLibrary($("#library-panel"));
+function showView(view) {
+  if (currentView !== "stats") queries[currentView] = $("#search").value;
+  currentView = view;
+  const titles = {
+    history: text("阅读历史", "Reading history"),
+    library: text("书库", "Library"),
+    stats: text("阅读统计", "Reading statistics"),
+  };
+  $("aside h1").textContent = titles[view];
+  $("aside p").textContent = {
+    history: text("按时间浏览读过的文档", "Documents you have opened"),
+    library: text("收藏本机的书籍与文档", "Your local books and documents"),
+    stats: text("页数、注释数与阅读时间", "Pages, annotations and reading time"),
+  }[view];
+  for (const name of ["history", "library", "stats"]) {
+    $("#" + name + "-panel").hidden = view !== name;
+    $("#" + name + "-tab").classList.toggle("selected", view === name);
+    $("#" + name + "-tab").setAttribute("aria-pressed", String(view === name));
   }
-  if (visible) statsView.refresh();
+  $(".search").hidden = view === "stats";
+  $("#search").value = queries[view] || "";
+  $("#search").placeholder =
+    view === "library" ? text("搜索书库", "Search library") : text("搜索阅读历史", "Search reading history");
+  $("#search").setAttribute("aria-label", $("#search").placeholder);
+  $("#statistics").textContent =
+    view === "stats" ? text("阅读历史", "Reading history") : text("阅读统计", "Statistics");
+  $("#statistics").setAttribute("aria-pressed", String(view === "stats"));
+  $("#library").setAttribute("aria-pressed", String(view === "library"));
+  if (view === "stats") statsView.refresh();
+  if (view === "library") {
+    libraryView.setQuery(queries.library);
+    libraryView.refresh();
+  }
+  if (view === "history") render();
 }
 let refreshNeeded = false,
   refreshPromise;
@@ -43,6 +61,8 @@ if (!zh) {
   $("aside p").textContent = "Documents you have opened";
   $("#history-tab").textContent = "◷　Reading history";
   $("#stats-tab").textContent = "▥　Statistics";
+  $("#library-tab").textContent = "▤　Library";
+  $("#library").textContent = "Library";
   $("#statistics").textContent = "Statistics";
   $(".aside-hint").textContent = "Stored on this computer. Removing a record keeps the file.";
   $("#search").placeholder = "Search reading history";
@@ -126,14 +146,20 @@ function refresh() {
     });
   return refreshPromise;
 }
-$("#search").addEventListener("input", render);
+$("#search").addEventListener("input", () => {
+  queries[currentView] = $("#search").value;
+  if (currentView === "library") libraryView.setQuery(queries.library);
+  else render();
+});
 $("#open").addEventListener("click", () => native("openPicker").catch(showError));
 $("#notes").addEventListener("click", () => native("showNotes").catch(showError));
-$("#statistics").addEventListener("click", () => showStats(!statsVisible));
-$("#history-tab").addEventListener("click", () => showStats(false));
-$("#stats-tab").addEventListener("click", () => showStats(true));
+$("#statistics").addEventListener("click", () => showView(currentView === "stats" ? "history" : "stats"));
+$("#history-tab").addEventListener("click", () => showView("history"));
+$("#stats-tab").addEventListener("click", () => showView("stats"));
+$("#library").addEventListener("click", () => showView("library"));
+$("#library-tab").addEventListener("click", () => showView("library"));
 document.addEventListener("keydown", (e) => {
-  if (statsVisible) return;
+  if (currentView === "stats") return;
   if (((e.ctrlKey || e.metaKey) && ["f", "h"].includes(e.key.toLowerCase())) || e.key === "/") {
     e.preventDefault();
     $("#search").focus();

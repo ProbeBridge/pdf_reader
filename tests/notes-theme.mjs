@@ -245,19 +245,29 @@ try {
   ]) {
     await history.locator("#stats-range").selectOption(period);
     assert.equal(await history.locator(".stats-table tbody tr").count(), count);
+    assert.equal(await history.locator(".stats-chart").count(), 1);
+    assert.equal(await history.locator(".stats-point").count(), count);
+    assert.equal(await history.locator(".stats-legend-item").count(), 3);
     for (const metric of ["pages", "annotations", "seconds"]) {
-      const chart = history.locator(`.stats-chart[data-metric="${metric}"]`);
-      assert.equal(await chart.locator(".stats-bar").count(), count);
+      const bars = history.locator(
+        `.stats-chart .stats-bar[data-metric="${metric}"]`,
+      );
+      assert.equal(await bars.count(), count);
       assert.equal(
-        await chart
-          .locator(".stats-bar")
-          .evaluateAll((bars) =>
-            bars.some((bar) => parseFloat(bar.style.height) > 0),
-          ),
+        await bars.evaluateAll((bars) =>
+          bars.some((bar) => parseFloat(bar.style.height) > 0),
+        ),
         true,
       );
     }
   }
+  await history.locator(".stats-point").last().focus();
+  assert.match(
+    await history.locator(".stats-point-detail").textContent(),
+    locale.startsWith("zh")
+      ? /阅读页数.*注释数.*阅读时间/
+      : /Pages read.*Annotations.*Reading time/,
+  );
   assert.ok((await contrast(history, ".stat-card strong")).ratio >= 4.5);
   await history.screenshot({ path: resolve(artifacts, "statistics-dark.png") });
   await history.setViewportSize({ width: 390, height: 844 });

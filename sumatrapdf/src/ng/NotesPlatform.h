@@ -23,6 +23,7 @@ Point NotesCursorPoint(MainWindow*);
 void NotesStartTimer(MainWindow*);
 void NotesCancelTimer(MainWindow*);
 void NotesExport(MainWindow*, Str id, Str value);
+bool NotesPickBooks(MainWindow*, StrVec*);
 void ContextNotesExported(MainWindow*, Str id, bool ok);
 Str NotesEncrypt(Str);
 Str NotesDecrypt(Str);

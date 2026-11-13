@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  renameSync,
+  existsSync,
+} from "node:fs";
 import { resolve, join } from "node:path";
 import { chromium } from "playwright";
 import { readingSummary } from "../sumatrapdf/src/notes/reading-stats-model.js";
+import { libraryKey } from "../sumatrapdf/src/notes/library-model.js";
 
 const root = resolve(import.meta.dir, "..");
 const output = join(root, ".test-artifacts", `reader-features-${Date.now()}`);
@@ -24,6 +31,12 @@ const {
 } = await import("../sumatrapdf/tests/winapi.ts");
 setProcessDpiAware();
 const file = join(output, "reading.pdf");
+const bookFile = join(output, "Unopened book.pdf"),
+  bookBytes = makeTextPdf(
+    "A local book that has never been in reading history.",
+  );
+writeFileSync(bookFile, bookBytes);
+const bookKey = libraryKey(bookFile, true);
 writeFileSync(
   file,
   makeTextPdf(
@@ -93,6 +106,16 @@ async function stats(page: any) {
       "notes",
       JSON.stringify({ action: "readingStats" }),
     ),
+  );
+}
+async function libraryCall(page: any, action: string, fields: any = {}) {
+  return page.evaluate(
+    ({ action, fields }: any) =>
+      (window as any).__sumatra__.call(
+        "notes",
+        JSON.stringify({ action, ...fields }),
+      ),
+    { action, fields },
   );
 }
 async function stop() {
@@ -200,6 +223,21 @@ try {
   );
   assert.equal(await history.locator('[data-stat="words"]').textContent(), "1");
   await history.screenshot({ path: join(output, "native-statistics.png") });
+  assert.deepEqual(await libraryCall(history, "library"), []);
+  assert.ok(
+    !(await libraryCall(history, "history")).some(
+      (item: any) => item.path === bookFile,
+    ),
+  );
+  await libraryCall(history, "write", {
+    key: bookKey,
+    value: JSON.stringify({
+      name: "Unopened book.pdf",
+      path: bookFile,
+      addedAt: Date.now(),
+    }),
+    expected: "null",
+  });
   await stop();
   assert.match(
     readFileSync(join(data, "SumatraPDF-settings.txt"), "utf8"),
@@ -221,6 +259,51 @@ try {
     "reopening a document preserves daily page deduplication",
   );
   assert.equal(restored.days.at(-2)?.words, 1);
+  console.log(
+    "Checking local library persistence, new-file opening and missing-file recovery...",
+  );
+  const books = await libraryCall(notes, "library");
+  assert.equal(books.length, 1);
+  assert.equal(books[0].book.path, bookFile);
+  assert.equal(books[0].missing, false);
+  sendCommandSync(app.frame, cmdId("CmdReadingHistory"));
+  const home = await pageFor("history.html");
+  await home.locator("#library").click();
+  await home.locator(".book-title").waitFor();
+  await home.locator(".book-title").click();
+  await notes
+    .locator("#doc-title")
+    .filter({ hasText: "Unopened book.pdf" })
+    .waitFor();
+  assert.ok(
+    (await libraryCall(notes, "history")).some(
+      (item: any) => item.path === bookFile,
+    ),
+  );
+  sendCommandSync(app.frame, cmdId("CmdCloseCurrentDocument"));
+  sendCommandSync(app.frame, cmdId("CmdReadingHistory"));
+  renameSync(bookFile, bookFile + ".moved");
+  assert.equal((await libraryCall(home, "library"))[0].missing, true);
+  await assert.rejects(
+    libraryCall(home, "open", { path: bookFile }),
+    /moved|unavailable/,
+  );
+  await home.locator("#library").click();
+  await home.locator(".book-status:not([hidden])").waitFor();
+  await home.locator(".book-remove").click();
+  await home.waitForFunction(
+    () => document.querySelectorAll(".book-card").length === 0,
+  );
+  assert.equal(
+    existsSync(bookFile + ".moved"),
+    true,
+    "removing a library entry keeps the source file",
+  );
+  await home.locator("#toast button").click();
+  await home.locator(".book-title").waitFor();
+  assert.equal((await libraryCall(home, "library")).length, 1);
+  assert.deepEqual(readFileSync(bookFile + ".moved"), bookBytes);
+  renameSync(bookFile + ".moved", bookFile);
   await stop();
   console.log(
     `PASS: native theme sync/persistence, page dwell/deduplication, foreground timing, vocabulary idempotency/date, encrypted statistics persistence. Artifacts: ${output}`,

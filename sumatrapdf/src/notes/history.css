@@ -1,5 +1,6 @@
 @import url("notes.css");
 @import url("reading-stats.css");
+@import url("library.css");
 :root {
   background: var(--history-background);
   font-size: 14px;

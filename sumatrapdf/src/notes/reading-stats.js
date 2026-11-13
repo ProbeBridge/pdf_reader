@@ -23,6 +23,14 @@ const duration = (seconds) =>
     : seconds >= 60
       ? text(`${Math.floor(seconds / 60)} 分钟`, `${Math.floor(seconds / 60)}m`)
       : text(`${seconds} 秒`, `${seconds}s`);
+const axisDuration = (seconds) =>
+  seconds >= 60 && seconds % 60
+    ? text(`${Math.floor(seconds / 60)}分${seconds % 60}秒`, `${Math.floor(seconds / 60)}m ${seconds % 60}s`)
+    : duration(seconds);
+const chartScale = (maximum) => {
+  const step = Math.max(1, 10 ** Math.floor(Math.log10(Math.max(1, maximum) / 4)));
+  return Math.max(4, 4 * Math.ceil(maximum / 4 / step) * step);
+};
 
 export function createReadingStats(container) {
   let records = {},
@@ -93,33 +101,76 @@ export function createReadingStats(container) {
       number.dataset.stat = metric.stat;
       card.append(node("h3", "", text(`${currentLabel}${metric.title}`, `${metric.title} ${currentLabel}`)), number);
       cards.append(card);
-      const chart = node("section", "stats-chart"),
-        chartHeading = node("div", "stats-chart-heading"),
-        title = node("h3", "", metric.title),
-        maximum = Math.max(1, ...summary.points.map((point) => point[metric.key]));
-      chart.dataset.metric = metric.key;
-      title.id = `stats-chart-${metric.key}`;
-      chart.setAttribute("aria-labelledby", title.id);
-      chartHeading.append(title, node("span", "stats-scale", metric.format(maximum)));
-      const bars = node("div", "stats-bars");
-      bars.style.setProperty("--points", summary.points.length);
-      bars.setAttribute("aria-hidden", "true");
-      for (const point of summary.points) {
-        const column = node("div", "stats-point"),
-          bar = node("span", "stats-bar");
-        column.title = `${pointLabel(point, period)} · ${metric.title}: ${metric.format(point[metric.key])}`;
-        bar.style.height = `${(100 * point[metric.key]) / maximum}%`;
-        column.append(bar);
-        bars.append(column);
-      }
-      const axis = node("div", "stats-axis");
-      axis.append(
-        node("span", "", dateLabel(summary.points[0].start, period)),
-        node("span", "", dateLabel(summary.current.start, period)),
-      );
-      chart.append(chartHeading, bars, axis);
-      charts.append(chart);
     }
+    const chart = node("section", "stats-chart"),
+      chartHeading = node("div", "stats-chart-heading"),
+      title = node("h3", "", text("阅读趋势", "Reading activity")),
+      legend = node("div", "stats-legend"),
+      countMax = chartScale(Math.max(...summary.points.flatMap((point) => [point.pages, point.annotations]))),
+      timeMax = chartScale(Math.max(...summary.points.map((point) => point.seconds)));
+    title.id = "stats-chart-title";
+    chart.setAttribute("aria-labelledby", title.id);
+    chartHeading.append(
+      title,
+      node(
+        "span",
+        "stats-scale",
+        text("页数 / 注释数：左轴 · 时间：右轴", "Pages / annotations: left axis · time: right axis"),
+      ),
+    );
+    for (const metric of metrics) {
+      const item = node("span", "stats-legend-item", metric.title);
+      item.dataset.metric = metric.key;
+      legend.append(item);
+    }
+    const plot = node("div", "stats-plot"),
+      left = node("div", "stats-y-axis"),
+      right = node("div", "stats-y-axis stats-y-right"),
+      bars = node("div", "stats-bars"),
+      detail = node(
+        "p",
+        "stats-point-detail",
+        text(
+          "悬停或聚焦柱形，查看该时段的三项统计。",
+          "Hover or focus a column to see all three values for that period.",
+        ),
+      );
+    left.setAttribute("aria-hidden", "true");
+    right.setAttribute("aria-hidden", "true");
+    for (let tick = 4; tick >= 0; tick--) {
+      left.append(node("span", "", String((countMax * tick) / 4)));
+      right.append(node("span", "", axisDuration((timeMax * tick) / 4)));
+    }
+    bars.style.setProperty("--points", summary.points.length);
+    for (const point of summary.points) {
+      const column = node("button", "stats-point");
+      column.type = "button";
+      const description = `${pointLabel(point, period)} · ${metrics.map((metric) => `${metric.title}: ${metric.key === "seconds" ? axisDuration(point.seconds) : metric.format(point[metric.key])}`).join(" · ")}`;
+      column.title = description;
+      column.setAttribute("aria-label", description);
+      column.addEventListener("mouseenter", () => {
+        detail.textContent = description;
+      });
+      column.addEventListener("focus", () => {
+        detail.textContent = description;
+      });
+      for (const metric of metrics) {
+        const bar = node("span", "stats-bar");
+        bar.dataset.metric = metric.key;
+        bar.dataset.value = point[metric.key];
+        bar.style.height = `${(100 * point[metric.key]) / (metric.key === "seconds" ? timeMax : countMax)}%`;
+        column.append(bar);
+      }
+      bars.append(column);
+    }
+    plot.append(left, bars, right);
+    const axis = node("div", "stats-axis");
+    axis.append(
+      node("span", "", dateLabel(summary.points[0].start, period)),
+      node("span", "", dateLabel(summary.current.start, period)),
+    );
+    chart.append(chartHeading, legend, plot, axis, detail);
+    charts.append(chart);
     caption.textContent = text(
       `${windowLabel}：共阅读 ${summary.totals.pages} 页，新增 ${summary.totals.annotations} 条注释，阅读 ${duration(summary.totals.seconds)}。`,
       `${windowLabel}: ${summary.totals.pages} pages, ${summary.totals.annotations} annotations, ${duration(summary.totals.seconds)}.`,
