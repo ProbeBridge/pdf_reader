@@ -35,7 +35,24 @@ node tests/reflow-play.mjs
 
 原生语音回归使用真实 WKWebView Web Audio，静音输出并等待完整音频结束，检查 LLM 回复挂起时只自动播放一次，以及正文和重排操作栏的手动重播。
 
-限制：本机没有 Windows C++ 工具链，Windows 编译与原生回归尚需在 Windows 上运行。现有 `tests/reflow-anchor.mjs` 在本机 Chromium 的段落缩放定位断言失败；在未修改的 `origin/main` 上连续两次得到相同结果，属于基线问题。本次没有修改其定位算法。
+限制：本机没有 Windows C++ 工具链，Windows 编译与原生回归尚需在 Windows 上运行。当前 Chromium 重排、间距覆盖与缩放定位测试通过；未修改定位算法。
+
+## 儿童阅读排版依据
+
+目标为 9–12 岁的长文阅读。Windows/Mac 共用 `src/notes/reflow.css`，只改变呈现，保留原文字符、强调语义、注释锚点和字号缩放。
+
+| 项目       | 默认设置                                      | 依据与边界                                                                                           |
+| ---------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 字体       | Verdana，回退 Arial、Noto Sans 及中文系统字体 | BDA 推荐易辨认的无衬线字体；不是指定某款字体即可改善阅读能力                                         |
+| 字号       | 100% 时 19px，继续允许 50%–400% 缩放          | 取 BDA 16–19px 建议范围的上端；实际大小可随阅读者调整                                                |
+| 行距、段距 | 行高 1.5，段后间隔 1em，不首行缩进            | 保持分行与分段清晰；另验证段距增至 2em 时不丢内容                                                    |
+| 行宽、对齐 | 居中单栏，上限 `min(60ch,40em)`，正文左对齐   | 以 WCAG 不宜超过 80 个拉丁字符／40 个中日韩字形的原则控制行宽；`ch` 是近似宽度单位，不是精确字符计数 |
+| 字距、词距 | 分别增加 0.02em、0.08em                       | 温和的产品默认值，并非 WCAG 指定默认值                                                               |
+| 颜色       | 浅色用偏暖背景与深色文字；保留深色主题        | 正文维持高对比度，避免依赖颜色理解内容                                                               |
+
+依据：[BDA Style Guide](https://cdn.bdadyslexia.org.uk/uploads/documents/Advice/style-guide/BDA-Style-Guide-2023.pdf?v=1680514568)、[WCAG 2.2 显示方式 1.4.8](https://www.w3.org/WAI/WCAG22/Understanding/visual-presentation.html)、[文本间距 1.4.12](https://www.w3.org/WAI/WCAG22/Understanding/text-spacing.html)。WCAG 的间距要求是支持用户覆盖后仍可读，不是强制所有文本使用这些默认数值；本预设不代表完整 WCAG 合规认证。
+
+验证覆盖宽窗口短行、窄窗口 400% 重排、原文选区和注释定位，并将行高 1.5、段距 2em、字距 0.12em、词距 0.16em 同时覆盖后检查文字不变、段落不裁切、表格不溢出。儿童研究显示字号效果会随年龄、任务改变，因此保留调节：[Katzir 等，2013](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0074061)。
 
 以下保留原始方案，条目中的“待验证”描述的是开始移植时的状态。
 

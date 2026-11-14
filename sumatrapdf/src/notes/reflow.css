@@ -1,6 +1,16 @@
 @import url("theme.css");
 :root {
   --font-scale: 1;
+  --reading-font: Verdana, Arial, "Noto Sans", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --reading-size: 19px;
+  --reading-line-height: 1.5;
+  --reading-paragraph-gap: 1em;
+  --reading-letter-spacing: 0.02em;
+  --reading-word-spacing: 0.08em;
+  --reading-surface: #faf9f5;
+}
+:root[data-theme="dark"] {
+  --reading-surface: var(--surface);
 }
 * {
   box-sizing: border-box;
@@ -15,8 +25,8 @@ body {
     16px/1.7 system-ui,
     "Microsoft YaHei",
     sans-serif;
-  background: Canvas;
-  color: CanvasText;
+  background: var(--reading-surface);
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 nav {
@@ -57,9 +67,17 @@ button:disabled {
 }
 main {
   width: 100%;
+  max-width: min(60ch, 40em);
+  margin-inline: auto;
   min-width: 0;
-  padding: 0 clamp(12px, 3vw, 40px);
-  font-size: calc(18px * var(--font-scale));
+  padding: 0 clamp(16px, 3vw, 32px);
+  font-family: var(--reading-font);
+  font-size: calc(var(--reading-size) * var(--font-scale));
+  line-height: var(--reading-line-height);
+  letter-spacing: var(--reading-letter-spacing);
+  word-spacing: var(--reading-word-spacing);
+  text-align: start;
+  hyphens: none;
 }
 .source-page {
   width: 100%;
@@ -74,7 +92,7 @@ main {
   font:
     12px/1.5 system-ui,
     sans-serif;
-  color: GrayText;
+  color: var(--muted);
   margin-bottom: 16px;
 }
 .source-page:last-child {
@@ -91,7 +109,8 @@ main {
   overflow-wrap: anywhere;
 }
 .page-content p {
-  margin: 0.5em 0 1em;
+  margin: 0 0 var(--reading-paragraph-gap);
+  text-indent: 0;
 }
 .page-content h1 {
   font-size: 1.5em;

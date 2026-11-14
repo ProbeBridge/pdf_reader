@@ -33,7 +33,9 @@ export async function testit() {
     ],
     { stdio: "ignore" },
   );
-  const exited = new Promise<void>((done) => child.once("exit", () => done()));
+  const exited = new Promise<{ code: number | null; signal: string | null }>((done) =>
+    child.once("exit", (code, signal) => done({ code, signal })),
+  );
   let socket: Awaited<ReturnType<typeof connect>> | undefined;
   try {
     socket = await connect(pipe, 15000);
@@ -139,6 +141,14 @@ export async function testit() {
     assert.equal(await evaluate("reflow", "document.documentElement.dataset.theme"), "dark");
     const originalLabel = await evaluate("reflow", "navigator.language.startsWith('zh') ? '原版' : 'Original view'");
     assert.equal(await evaluate("reflow", "document.querySelector('#original').textContent"), originalLabel);
+    const typography = await evaluate(
+      "reflow",
+      "(()=>{const p=document.querySelector('.page-content'),s=getComputedStyle(p);return {font:parseFloat(s.fontSize),height:parseFloat(s.lineHeight),family:s.fontFamily,width:p.getBoundingClientRect().width,align:s.textAlign}})()",
+    );
+    assert.ok(typography.family.startsWith("Verdana"));
+    assert.ok(typography.height >= typography.font * 1.5);
+    assert.ok(typography.width <= typography.font * 40 + 1);
+    assert.ok(["start", "left"].includes(typography.align));
     console.log("PASS visible text switch opens real PDF reflow; View menu and check state are available");
 
     for (const close of [
@@ -301,7 +311,9 @@ export async function testit() {
       "PASS native combined calendar chart renders pages, annotation count and reading time at every interval",
     );
     await request("Quit");
-    await exited;
+    const exit = await exited;
+    assert.equal(exit.signal, null, "Native reflow shutdown must not crash");
+    assert.equal(exit.code, 0);
   } finally {
     socket?.destroy();
     child.kill();

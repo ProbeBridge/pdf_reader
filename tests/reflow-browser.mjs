@@ -132,6 +132,93 @@ try {
     actions.filter((a) => a.action === "page").length <= 5,
     "startup must only request a bounded page window",
   );
+  await page.setViewportSize({ width: 1600, height: 900 });
+  const readingLayout = await page
+    .locator('.source-page[data-page="1"] .page-content')
+    .evaluate((element) => {
+      const style = getComputedStyle(element),
+        font = parseFloat(style.fontSize);
+      return {
+        width: element.getBoundingClientRect().width,
+        font,
+        lineHeight: parseFloat(style.lineHeight),
+        align: style.textAlign,
+      };
+    });
+  assert.ok(
+    readingLayout.width <= readingLayout.font * 40 + 1,
+    "A wide window keeps a bounded reading column",
+  );
+  assert.ok(
+    readingLayout.lineHeight >= readingLayout.font * 1.5,
+    "Reading text has at least 1.5 line spacing",
+  );
+  assert.ok(
+    ["start", "left"].includes(readingLayout.align),
+    "Prose is left aligned instead of justified",
+  );
+  await page.setViewportSize({ width: 1000, height: 800 });
+  const originalText = await page
+    .locator('.source-page[data-page="1"] .page-content')
+    .textContent();
+  const spacedLayout = await page.evaluate(() => {
+    const properties = [
+      "line-height",
+      "letter-spacing",
+      "word-spacing",
+      "margin-bottom",
+    ];
+    window.spacingStyles = [
+      ...document.querySelectorAll("#pages,#pages *"),
+    ].map((element) => [
+      element,
+      properties.map((name) => [
+        name,
+        element.style.getPropertyValue(name),
+        element.style.getPropertyPriority(name),
+      ]),
+    ]);
+    for (const [element] of window.spacingStyles) {
+      element.style.setProperty("line-height", "1.5", "important");
+      element.style.setProperty("letter-spacing", "0.12em", "important");
+      element.style.setProperty("word-spacing", "0.16em", "important");
+      if (element.tagName === "P")
+        element.style.setProperty("margin-bottom", "2em", "important");
+    }
+    dispatchEvent(new Event("resize"));
+    const root = document.querySelector(
+      '.source-page[data-page="1"] .page-content',
+    );
+    return {
+      overflow: document.documentElement.scrollWidth > innerWidth + 1,
+      clippedParagraphs: [...root.querySelectorAll("p")].some(
+        (p) => p.scrollWidth > p.clientWidth + 1,
+      ),
+      overlappingCells: [...root.querySelectorAll("td,th")].some(
+        (cell) => cell.scrollWidth > cell.clientWidth + 1,
+      ),
+    };
+  });
+  assert.deepEqual(
+    spacedLayout,
+    { overflow: false, clippedParagraphs: false, overlappingCells: false },
+    "WCAG text-spacing overrides preserve readable content",
+  );
+  assert.equal(
+    await page
+      .locator('.source-page[data-page="1"] .page-content')
+      .textContent(),
+    originalText,
+  );
+  await page.evaluate(() => {
+    for (const [element, properties] of window.spacingStyles)
+      for (const [name, value, priority] of properties) {
+        if (value) element.style.setProperty(name, value, priority);
+        else element.style.removeProperty(name);
+      }
+    delete window.spacingStyles;
+    dispatchEvent(new Event("resize"));
+  });
   const before = await page
     .locator('.source-page[data-page="1"] p')
     .first()
