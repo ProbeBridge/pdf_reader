@@ -89,6 +89,7 @@ static StrVec gStoreKeys;
 static StrVec gStoreValues;
 static bool gStoreLoaded = false;
 static bool gStoreFailed = false;
+static bool gLegacyReadFailed = false;
 static u64 gNoteDocumentEpoch = 0;
 
 enum class NotesStoreLoad {
@@ -249,6 +250,9 @@ static TempStr StorePath() {
     return GetPathInAppDataDirTemp(StrL("context-notes.dat"));
 }
 
+static bool SaveNotesStore();
+
+// Callers hold NotesStoreGuard so migration and normal writes share a lock.
 static void LoadNotesStore(NotesStoreLoad mode = NotesStoreLoad::Cached) {
     if (gStoreLoaded && (mode == NotesStoreLoad::Cached || gDontSaveSettings || gForTesting)) {
         return;
@@ -267,41 +271,61 @@ static void LoadNotesStore(NotesStoreLoad mode = NotesStoreLoad::Cached) {
     }
     Str bytes = file::ReadFile(path);
     AutoFree<char> freeBytes(bytes.s);
+    Str plain = bytes;
+    str::TrimWs(plain);
+    bool legacy = len(plain) > 0 && plain.s[0] != '{';
+    Str decoded;
+    AutoFree<char> freeDecoded;
+    if (legacy) {
+        // A cancelled legacy authorization must not prompt again on every read.
+        if (gLegacyReadFailed) {
+            gStoreFailed = true;
+            return;
+        }
+        gLegacyReadFailed = true;
 #if OS_WIN
-    DATA_BLOB input{(DWORD)len(bytes), (BYTE*)bytes.s};
-    DATA_BLOB output{};
-    if (!CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
-        gStoreFailed = true;
-        return;
-    }
-    Str plain((char*)output.pbData, (int)output.cbData);
+        DATA_BLOB input{(DWORD)len(bytes), (BYTE*)bytes.s};
+        DATA_BLOB output{};
+        if (CryptUnprotectData(&input, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
+            decoded = str::Dup(Str((char*)output.pbData, (int)output.cbData));
+            LocalFree(output.pbData);
+        }
 #else
-    Str plain = NotesDecrypt(bytes);
-    if (len(plain) == 0) {
+        decoded = NotesDecrypt(bytes);
+#endif
+        freeDecoded.Set(decoded.s);
+        plain = decoded;
+        str::TrimWs(plain);
+    }
+    if (len(plain) < 2 || plain.s[0] != '{') {
         gStoreFailed = true;
         return;
     }
-#endif
     StrVec keys;
     StrVec values;
     json::Reader r(plain);
+    bool valid = true;
     for (json::Value& v : r) {
-        if (!v.path || v.path->next || v.type != json::Type::String) {
-            continue;
+        if (!v.path || v.path->next || v.type != json::Type::String || keys.Find(json::PathSegKey(v.path)) >= 0) {
+            valid = false;
+            break;
         }
         keys.Append(json::PathSegKey(v.path));
         values.Append(v.value);
     }
-    gStoreFailed = !r.Ok();
-    if (!gStoreFailed) {
-        gStoreKeys = keys;
-        gStoreValues = values;
-    }
-#if OS_WIN
-    LocalFree(output.pbData);
-#else
-    str::Free(plain);
+    gStoreFailed = !valid || !r.Ok();
+    if (gStoreFailed) return;
+    gStoreKeys = keys;
+    gStoreValues = values;
+    if (legacy && !gDontSaveSettings && !gForTesting) {
+        Str backup = str::JoinTemp(path, StrL(".encrypted.bak"));
+        bool backedUp = file::Exists(backup) || file::Copy(backup, path, true);
+#if !OS_WIN
+        backedUp = backedUp && chmod(CStrTemp(backup), 0600) == 0;
 #endif
+        gStoreFailed = !backedUp || !SaveNotesStore();
+    }
+    if (!gStoreFailed) gLegacyReadFailed = false;
 }
 
 static bool SaveNotesStore() {
@@ -321,26 +345,16 @@ static bool SaveNotesStore() {
     if (gDontSaveSettings || gForTesting) {
         return true;
     }
-#if OS_WIN
-    DATA_BLOB input{(DWORD)len(data), (BYTE*)data.s};
-    DATA_BLOB output{};
-    if (!CryptProtectData(&input, L"SumatraPDF AI notes", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN,
-                          &output)) {
-        return false;
-    }
-    Str encrypted((char*)output.pbData, (int)output.cbData);
-#else
-    Str encrypted = NotesEncrypt(data);
-    if (len(encrypted) == 0) return false;
-#endif
     TempStr path = StorePath();
     TempStr tmp = fmt("%s.%d.tmp", path, (int)CurrentProcessId());
-    bool ok = len(encrypted) <= kNotesStoreMaxBytes && file::WriteFile(tmp, encrypted);
-#if OS_WIN
-    LocalFree(output.pbData);
+    bool ok;
+#if !OS_WIN
+    // Set permissions at creation, before any API key bytes reach the file.
+    int fd = open(CStrTemp(tmp), O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    ok = fd >= 0 && fchmod(fd, 0600) == 0 && file::WriteAll(fd, data);
+    if (fd >= 0) close(fd);
 #else
-    str::Free(encrypted);
-    if (ok) ok = chmod(CStrTemp(tmp), 0600) == 0;
+    ok = file::WriteFile(tmp, data);
 #endif
     if (ok) {
         file::FileHandle handle = file::OpenReadWrite(tmp, false);
@@ -352,6 +366,7 @@ static bool SaveNotesStore() {
     if (ok) {
         ok = file::RenameReplace(path, tmp);
     }
+    if (!ok) file::Delete(tmp);
     return ok;
 }
 
@@ -811,6 +826,35 @@ static void GoToNote(MainWindow* win, Str id) {
     }
 }
 
+static void SharedLibrary(StrVec& keys, StrVec& books) {
+#if OS_DARWIN
+    Str path = gForTesting ? GetPathInAppDataDirTemp(StrL("shared-library.json"))
+                           : StrL("/Users/Shared/SumatraPDF-AI/library.json");
+    if (!file::Exists(path) || file::GetSize(path) > kNotesStoreMaxBytes) return;
+    Str bytes = file::ReadFile(path);
+    AutoFree<char> freeBytes(bytes.s);
+    json::Reader reader(bytes);
+    for (json::Value& v : reader) {
+        if (!v.path || v.path->next || v.type != json::Type::String) continue;
+        Str key = json::PathSegKey(v.path);
+        Str bookPath = JsonField(v.value, StrL("path"));
+        if (!str::StartsWith(key, StrL("library:")) || len(bookPath) == 0 ||
+            len(JsonField(v.value, StrL("name"))) == 0 ||
+            !IsSupportedFileType(GuessFileTypeFromName(bookPath, true), true) || keys.Find(key) >= 0)
+            continue;
+        keys.Append(key);
+        books.Append(v.value);
+    }
+    if (!reader.Ok()) {
+        keys.Reset();
+        books.Reset();
+    }
+#else
+    (void)keys;
+    (void)books;
+#endif
+}
+
 static TempStr ReadingLibraryJson() {
     NotesStoreGuard guard;
     if (!guard.locked) return {};
@@ -819,8 +863,17 @@ static TempStr ReadingLibraryJson() {
     str::Builder b;
     b.AppendChar('[');
     bool comma = false;
+    StrVec sharedKeys, sharedBooks;
+    SharedLibrary(sharedKeys, sharedBooks);
+    for (int i = 0; i < len(sharedKeys); i++) {
+        if (comma) b.AppendChar(',');
+        b.Append(fmt("{\"key\":%s,\"book\":%s,\"shared\":true,\"missing\":%s}", JsonQuote(sharedKeys[i]),
+                     sharedBooks[i],
+                     file::Exists(JsonField(sharedBooks[i], StrL("path"))) ? StrL("false") : StrL("true")));
+        comma = true;
+    }
     for (int i = 0; i < len(gStoreKeys); i++) {
-        if (!str::StartsWith(gStoreKeys[i], StrL("library:"))) continue;
+        if (!str::StartsWith(gStoreKeys[i], StrL("library:")) || sharedKeys.Find(gStoreKeys[i]) >= 0) continue;
         Str path = JsonField(gStoreValues[i], StrL("path"));
         if (len(path) == 0) continue;
         if (comma) b.AppendChar(',');
@@ -833,6 +886,10 @@ static TempStr ReadingLibraryJson() {
 }
 
 static bool IsLibraryPath(Str path) {
+    StrVec sharedKeys, sharedBooks;
+    SharedLibrary(sharedKeys, sharedBooks);
+    for (Str book : sharedBooks)
+        if (str::Eq(JsonField(book, StrL("path")), path)) return true;
     NotesStoreGuard guard;
     if (!guard.locked) return false;
     LoadNotesStore(NotesStoreLoad::Refresh);
@@ -981,8 +1038,7 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
             LoadNotesStore(NotesStoreLoad::Refresh);
         }
         error = gStoreFailed || !guard.locked ? 1 : 0;
-        result = error ? JsonQuote(StrL("Cannot read encrypted notes. The original file has been preserved."))
-                       : ReadNotesStore();
+        result = error ? JsonQuote(StrL("Cannot read notes. The original file has been preserved.")) : ReadNotesStore();
     } else if (str::Eq(action, StrL("write")) || str::Eq(action, StrL("remove"))) {
         NotesStoreGuard guard;
         if (guard.locked) {
@@ -1133,7 +1189,10 @@ static int NotesAccel(void* ctx, u16 vk, bool ctrl, bool shift, bool alt) {
 static ContextNotes* EnsureNotes(MainWindow* win) {
     if (!win->contextNotes) {
         win->contextNotes = new ContextNotes();
-        LoadNotesStore();
+        {
+            NotesStoreGuard guard;
+            if (guard.locked) LoadNotesStore();
+        }
         int idx = gStoreKeys.Find(StrL("settings"));
         if (idx >= 0 && str::Eq(JsonField(gStoreValues[idx], StrL("clickToAnnotate")), StrL("false"))) {
             win->contextNotes->clickEnabled = false;
@@ -1190,7 +1249,10 @@ void ContextNotesSync(MainWindow* win) {
         n->documentModel = model;
         n->documentEpoch = ++gNoteDocumentEpoch;
         VecReset(n->pendingText);
-        LoadNotesStore(NotesStoreLoad::Refresh);
+        {
+            NotesStoreGuard guard;
+            if (guard.locked) LoadNotesStore(NotesStoreLoad::Refresh);
+        }
         ClearNoteInk(n);
         ClearNoteRanges(n);
         str::ReplaceWithCopy(&n->documentPath, path);

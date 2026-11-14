@@ -66,6 +66,12 @@
   font-size: 12px;
   margin-top: 8px;
 }
+.book-shared {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
 .book-remove {
   position: absolute;
   top: 21px;

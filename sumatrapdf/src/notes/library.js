@@ -57,7 +57,9 @@ export function createLibrary(container) {
       const remove = button("×", () => removeBook(entry), "book-remove");
       remove.title = text("移出书库", "Remove from library");
       remove.setAttribute("aria-label", `${remove.title}: ${book.name}`);
-      card.append(cover, name, path, status, remove);
+      card.append(cover, name, path, status);
+      if (entry.shared) card.append(node("span", "book-shared", text("共享书库", "Shared library")));
+      else card.append(remove);
       grid.append(card);
     }
   }

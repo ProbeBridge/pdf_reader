@@ -850,7 +850,7 @@ try {
     readFileSync(join(data, "context-notes.dat")).includes(
       Buffer.from("LOCAL_REFLOW_FIXTURE_ONLY"),
     ),
-    false,
+    true,
   );
   report.milestones.push(
     "selection → native source glyphs → streaming API → note → DOM highlight",

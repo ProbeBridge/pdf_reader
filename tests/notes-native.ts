@@ -235,11 +235,11 @@ try {
   assert.equal(highlights.length, 1);
   assert.match(highlights[0][0], /^page:sha256:/);
   assert.ok((highlights[0][1] as any).annotations[0].anchor.ranges.length > 0);
-  const encrypted = readFileSync(join(data, "context-notes.dat"));
+  const stored = readFileSync(join(data, "context-notes.dat"));
   assert.equal(
-    encrypted.includes(Buffer.from(testKey)),
-    false,
-    "API key must be encrypted on disk",
+    stored.includes(Buffer.from(testKey)),
+    true,
+    "API key must persist in the local JSON store",
   );
   await captureWindowToPng(app.frame, join(output, "native-notes.png"));
   sendCommandSync(app.frame, cmdId("CmdReadingHistory"));
@@ -295,7 +295,7 @@ try {
     "restoring notes must not call the model again",
   );
   console.log(
-    "PASS: native selection → streaming model → highlight anchors; encrypted persistence; chronological searchable history; rename/reopen restore; HTTP without CORS, GET, 401 body, redirect blocking, cancellation and window-close cleanup.",
+    "PASS: native selection → streaming model → highlight anchors; plain JSON persistence; chronological searchable history; rename/reopen restore; HTTP without CORS, GET, 401 body, redirect blocking, cancellation and window-close cleanup.",
   );
   console.log(`Artifacts: ${output}`);
 } finally {

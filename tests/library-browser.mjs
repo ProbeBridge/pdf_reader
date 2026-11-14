@@ -53,7 +53,8 @@ try {
       store = {},
       calls = [],
       errors = [];
-    let picked = [],
+    let shared = [],
+      picked = [],
       libraryCalls = 0;
     const documents = [
       { name: "History.pdf", path: "C:\\History.pdf", opened: Date.now() },
@@ -67,11 +68,14 @@ try {
           return documents;
         case "library":
           libraryCalls++;
-          return Object.entries(store).map(([key, book]) => ({
-            key,
-            book,
-            missing: book.path.includes("missing"),
-          }));
+          return [
+            ...shared,
+            ...Object.entries(store).map(([key, book]) => ({
+              key,
+              book,
+              missing: book.path.includes("missing"),
+            })),
+          ];
         case "libraryPicker":
           return picked;
         case "write":
@@ -164,6 +168,30 @@ try {
       .locator("#toast")
       .filter({ hasText: "File is unavailable" })
       .waitFor();
+    shared = [
+      {
+        key: "library:/Users/Shared/Shared.pdf",
+        book: {
+          path: "/Users/Shared/Shared.pdf",
+          name: "Shared.pdf",
+          addedAt: Date.now(),
+        },
+        shared: true,
+        missing: false,
+      },
+    ];
+    await page.evaluate(() =>
+      window.dispatchEvent(
+        new CustomEvent("storechange", { detail: { "library:shared": {} } }),
+      ),
+    );
+    await page.locator(".book-shared").waitFor();
+    const sharedCard = page
+      .locator(".book-card")
+      .filter({ has: page.locator(".book-shared") });
+    assert.equal(await sharedCard.locator(".book-remove").count(), 0);
+    await sharedCard.locator(".book-title").click();
+    assert.equal(calls.at(-1).path, shared[0].book.path);
     await page.screenshot({ path: resolve(output, `library-${locale}.png`) });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(

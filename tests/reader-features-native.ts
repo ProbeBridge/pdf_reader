@@ -306,7 +306,7 @@ try {
   renameSync(bookFile + ".moved", bookFile);
   await stop();
   console.log(
-    `PASS: native theme sync/persistence, page dwell/deduplication, foreground timing, vocabulary idempotency/date, encrypted statistics persistence. Artifacts: ${output}`,
+    `PASS: native theme sync/persistence, page dwell/deduplication, foreground timing, vocabulary idempotency/date, local statistics persistence. Artifacts: ${output}`,
   );
 } finally {
   await stop();
