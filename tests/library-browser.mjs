@@ -53,7 +53,8 @@ try {
       store = {},
       calls = [],
       errors = [];
-    let shared = [],
+    let coverImage,
+      shared = [],
       picked = [],
       libraryCalls = 0;
     const documents = [
@@ -69,10 +70,7 @@ try {
         case "read":
           return store;
         case "libraryCover":
-          return {
-            image:
-              "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
-          };
+          return { image: coverImage };
         case "library":
           libraryCalls++;
           return [
@@ -115,6 +113,13 @@ try {
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/history.html`);
     await page.locator(".row").waitFor();
+    coverImage = await page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 320;
+      canvas.height = 440;
+      canvas.getContext("2d").fillRect(0, 0, 320, 440);
+      return canvas.toDataURL("image/png");
+    });
     assert.equal(libraryCalls, 0, "library does not slow down history startup");
     assert.equal(
       calls.filter((call) => call.action === "libraryCover").length,
@@ -211,6 +216,24 @@ try {
     await page.waitForFunction(
       () => document.querySelector("#books").dataset.view === "list",
     );
+    const coversFit = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll(".book-cover img")].every((image) => {
+          const outer = image.parentElement.getBoundingClientRect(),
+            inner = image.getBoundingClientRect();
+          return (
+            inner.left >= outer.left &&
+            inner.top >= outer.top &&
+            inner.right <= outer.right &&
+            inner.bottom <= outer.bottom
+          );
+        }),
+      );
+    assert.equal(
+      await coversFit(),
+      true,
+      "Portrait previews stay inside list covers",
+    );
     assert.equal(
       await page.locator("#library-view-list").getAttribute("aria-pressed"),
       "true",
@@ -233,6 +256,11 @@ try {
       () => document.querySelector("#books").dataset.view === "grid",
     );
     await page.screenshot({ path: resolve(output, `library-${locale}.png`) });
+    assert.equal(
+      await coversFit(),
+      true,
+      "Portrait previews stay inside grid covers",
+    );
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(
       await page.evaluate(

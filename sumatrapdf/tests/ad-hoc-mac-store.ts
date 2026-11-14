@@ -140,8 +140,12 @@ export async function testit() {
           async () => String(await evaluate("Boolean(document.querySelector('.book-cover img')?.naturalWidth)")),
           (s) => s === "true",
         );
+        const coverFits =
+          "(()=>{const image=document.querySelector('.book-cover img');const inner=image.getBoundingClientRect(),outer=image.parentElement.getBoundingClientRect();return inner.left>=outer.left&&inner.top>=outer.top&&inner.right<=outer.right&&inner.bottom<=outer.bottom})()";
+        assert.equal(await evaluate(coverFits), true, "Portrait cover stays inside its grid button");
         await evaluate("(document.querySelector('#library-view-list').click(),true)");
         assert.equal(await evaluate("document.querySelector('#books').dataset.view"), "list");
+        assert.equal(await evaluate(coverFits), true, "Portrait cover stays inside its list button");
         await until(
           async () => String((await evaluate(call({ action: "read" })))["ui:library"]?.view),
           (s) => s === "list",

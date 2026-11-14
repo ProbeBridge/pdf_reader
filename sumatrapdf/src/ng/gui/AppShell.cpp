@@ -1408,8 +1408,7 @@ TempStr AppShellPromptForFileTemp(MainWindow* win) {
 #endif
 }
 
-// ng: gpui's prompt answers one path (see "gpui gaps"); Windows' own dialog
-// has orig's OFN_ALLOWMULTISELECT
+// GPUI returns multiple selected paths separated by newlines.
 bool AppShellPromptForFiles(MainWindow* win, Str filter, StrVec* pathsOut) {
     if (!win || !win->gpuiWin) {
         return false;
@@ -1420,12 +1419,20 @@ bool AppShellPromptForFiles(MainWindow* win, Str filter, StrVec* pathsOut) {
     }
 #endif
     (void)filter;
-    TempStr path = AppShellPromptForFileTemp(win);
-    if (len(path) == 0) {
+    gp::PathPrompt prompt;
+    prompt.files = true;
+    prompt.multiple = true;
+    prompt.title = ToGpui(Tr("Open"));
+    Str selected = FromGpui(gp::PromptForPathTemp(win->gpuiWin, prompt));
+    if (len(selected) == 0) {
         return false;
     }
-    pathsOut->Append(path);
-    return true;
+    // A single Unix filename can itself contain a newline.
+    if (file::Exists(selected)) {
+        pathsOut->Append(selected);
+        return true;
+    }
+    return Split(pathsOut, selected, StrL("\n"), true) > 0;
 }
 
 // --- key bindings -----------------------------------------------------------
