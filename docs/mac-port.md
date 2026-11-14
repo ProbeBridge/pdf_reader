@@ -37,6 +37,8 @@ node tests/reflow-play.mjs
 
 限制：本机没有 Windows C++ 工具链，Windows 编译与原生回归尚需在 Windows 上运行。当前 Chromium 重排、间距覆盖与缩放定位测试通过；未修改定位算法。
 
+ng 工具栏浮层打开时暂时隐藏原生 WebView，沿用对话框的遮挡处理；关闭后恢复同一视图和滚动位置。Windows 原版的工具栏菜单使用独立浮层窗口。
+
 ## 儿童阅读排版依据
 
 目标为 9–12 岁的长文阅读。Windows/Mac 共用 `src/notes/reflow.css`，只改变呈现，保留原文字符、强调语义、注释锚点和字号缩放。

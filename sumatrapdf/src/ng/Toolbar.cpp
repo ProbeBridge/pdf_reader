@@ -1565,13 +1565,14 @@ void ToolbarView::OnButton(ToolbarView* self, gp::Ctx* cx, const gp::ClickEvent*
     int cmdId = ui->btnCmds[(int)idx];
     if (cmdId == CmdChangeTheme) {
         auto* tb = Tb(win);
-        bool open = tb->hoverCmdId == cmdId;
-        HideToolbarHoverDropdown(win);
-        if (!open) {
+        if (tb->hoverCmdId != cmdId) {
+            HideToolbarHoverDropdown(win);
             tb->hoverCmdId = tb->hoverAnchorCmdId = cmdId;
             tb->hoverGen++;
-            HoverTooltipHide(cx);
         }
+        tb->hoverOpen.Cancel();
+        tb->hoverClose.Cancel();
+        HoverTooltipHide(cx);
         gp::Notify(cx);
         return;
     }

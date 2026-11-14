@@ -213,6 +213,13 @@ export async function testit() {
         () => request("TestToolbarButtons"),
         (s) => /dropdown cmd=\d+ items=6\b/.test(s),
       );
+      assert.match(await request("TestUiState"), / overlay=1\b/, "Toolbar palette must sit above native browser views");
+      await request("TestInput", "click", Math.round((r[0]! + r[2]!) / 2), Math.round((r[1]! + r[3]!) / 2));
+      assert.match(
+        await request("TestToolbarButtons"),
+        /dropdown cmd=\d+ items=6\b/,
+        "Clicking an open palette keeps it available",
+      );
       assert.equal(menu.split("\n").filter((line) => line.startsWith("dropdown-item ")).length, 6);
       assert.equal(menu.split("\n").filter((line) => /^dropdown-item .* current=1 /.test(line)).length, 1);
       if (language === "cn")

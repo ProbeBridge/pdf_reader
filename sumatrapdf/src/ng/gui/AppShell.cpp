@@ -3588,7 +3588,8 @@ gp::El* ShellView::Render(ShellView* self, gp::Ctx* cx) {
     gp::El* dlg = DialogsBuild(win, cx);
     gp::El* palette = CommandPaletteBuild(win, cx);
     gp::El* annotList = AnnotFilterListBuild(win, cx);
-    self->overlayUp = dlg || palette || annotList;
+    gp::El* strip = ToolbarOverlayBuild(win, cx);
+    self->overlayUp = dlg || palette || annotList || strip;
     bool dialogWasUp = self->dialogUp;
     self->dialogUp = dlg != nullptr;
     // a dialog that had the focus itself leaves it on nothing: back to the
@@ -3618,7 +3619,7 @@ gp::El* ShellView::Render(ShellView* self, gp::Ctx* cx) {
     if (toolbar && win->isToolbarOverlay) {
         root->Child(toolbar);
     }
-    if (gp::El* strip = ToolbarOverlayBuild(win, cx)) {
+    if (strip) {
         root->Child(strip);
     }
     if (showCaption && !gSettings->showCaption && win->captionOverlayShown) {
