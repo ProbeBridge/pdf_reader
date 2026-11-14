@@ -6,14 +6,40 @@ export function createLibrary(container) {
     query = "",
     pending,
     dirty = true,
-    adding = false;
+    adding = false,
+    view = "grid",
+    viewLoaded = false,
+    coverQueue = [],
+    activeCovers = 0;
+  const coverCache = new Map();
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.unobserve(entry.target);
+        coverQueue.push(entry.target);
+      }
+      loadCovers();
+    },
+    { rootMargin: "160px" },
+  );
   const heading = node("div", "heading library-heading"),
     title = node("div"),
     count = node("span", "library-count"),
-    add = button(text("添加本地书", "Add local books"), pick, "library-add");
+    add = button(text("添加本地书", "Add local books"), pick, "library-add"),
+    actions = node("div", "library-actions"),
+    views = node("div", "library-views"),
+    gridView = button(text("网格", "Grid"), () => setView("grid")),
+    listView = button(text("列表", "List"), () => setView("list"));
+  views.setAttribute("role", "group");
+  views.setAttribute("aria-label", text("书库显示方式", "Library display"));
+  gridView.id = "library-view-grid";
+  listView.id = "library-view-list";
+  views.append(gridView, listView);
+  actions.append(views, add);
   add.id = "add-books";
   title.append(node("h2", "", text("书库", "Library")), count);
-  heading.append(title, add);
+  heading.append(title, actions);
   const hint = node(
       "p",
       "library-hint",
@@ -27,6 +53,52 @@ export function createLibrary(container) {
   grid.id = "books";
   empty.id = "library-empty";
   container.append(heading, hint, grid, empty);
+  function applyView(mode) {
+    view = mode === "list" ? "list" : "grid";
+    grid.dataset.view = view;
+    gridView.setAttribute("aria-pressed", String(view === "grid"));
+    listView.setAttribute("aria-pressed", String(view === "list"));
+  }
+  async function setView(mode) {
+    applyView(mode);
+    await native("write", { key: "ui:library", value: JSON.stringify({ view }) });
+  }
+  function loadCovers() {
+    while (activeCovers < 2 && coverQueue.length) {
+      const cover = coverQueue.shift();
+      if (!cover.isConnected || container.hidden || document.hidden) continue;
+      const key = cover.dataset.coverKey;
+      if (!coverCache.has(key)) {
+        if (coverCache.size >= 96) coverCache.delete(coverCache.keys().next().value);
+        coverCache.set(
+          key,
+          native("libraryCover", { path: cover.dataset.path }).catch(() => null),
+        );
+      }
+      activeCovers++;
+      coverCache
+        .get(key)
+        .then((result) => {
+          if (!cover.isConnected || !result?.image?.startsWith("data:image/png;base64,")) return;
+          const image = node("img");
+          image.alt = "";
+          image.decoding = "async";
+          image.addEventListener(
+            "load",
+            () => {
+              cover.replaceChildren(image);
+              cover.classList.add("has-cover");
+            },
+            { once: true },
+          );
+          image.src = result.image;
+        })
+        .finally(() => {
+          activeCovers--;
+          loadCovers();
+        });
+    }
+  }
   function render() {
     const entries = libraryEntries(records, query);
     count.textContent = text(`${entries.length} 本书`, `${entries.length} books`);
@@ -37,6 +109,8 @@ export function createLibrary(container) {
           "书库还是空的。点击“添加本地书”选择文档。",
           "Your library is empty. Choose “Add local books” to select documents.",
         );
+    observer.disconnect();
+    coverQueue = [];
     grid.replaceChildren();
     for (const entry of entries) {
       const { book, missing } = entry,
@@ -44,6 +118,8 @@ export function createLibrary(container) {
       card.dataset.key = entry.key;
       const cover = button(book.name.split(".").at(-1).slice(0, 5).toUpperCase(), () => open(book), "book-cover");
       cover.setAttribute("aria-label", text(`打开 ${book.name}`, `Open ${book.name}`));
+      cover.dataset.path = book.path;
+      cover.dataset.coverKey = JSON.stringify([book.path, entry.version || ""]);
       const name = button(book.name, () => open(book), "book-title");
       name.title = book.name;
       const path = node("p", "book-path", book.path);
@@ -57,10 +133,13 @@ export function createLibrary(container) {
       const remove = button("×", () => removeBook(entry), "book-remove");
       remove.title = text("移出书库", "Remove from library");
       remove.setAttribute("aria-label", `${remove.title}: ${book.name}`);
-      card.append(cover, name, path, status);
-      if (entry.shared) card.append(node("span", "book-shared", text("共享书库", "Shared library")));
-      else card.append(remove);
+      const details = node("div", "book-details");
+      details.append(name, path, status);
+      if (entry.shared) details.append(node("span", "book-shared", text("共享书库", "Shared library")));
+      card.append(cover, details);
+      if (!entry.shared) card.append(remove);
       grid.append(card);
+      if (!missing) observer.observe(cover);
     }
   }
   async function open(book) {
@@ -109,6 +188,11 @@ export function createLibrary(container) {
     pending = (async () => {
       while (dirty && !container.hidden && !document.hidden) {
         dirty = false;
+        if (!viewLoaded) {
+          const stored = await native("read");
+          applyView(stored?.["ui:library"]?.view);
+          viewLoaded = true;
+        }
         records = await native("library");
         render();
       }
@@ -121,11 +205,14 @@ export function createLibrary(container) {
     return pending;
   }
   window.addEventListener("storechange", (event) => {
+    if (event.detail?.["ui:library"]) applyView(event.detail["ui:library"].newValue?.view);
     if (Object.keys(event.detail || {}).some((key) => key.startsWith("library:"))) refresh();
   });
   document.addEventListener("visibilitychange", () => {
     if (dirty) refresh();
+    if (!document.hidden) loadCovers();
   });
+  applyView(view);
   render();
   return {
     refresh,

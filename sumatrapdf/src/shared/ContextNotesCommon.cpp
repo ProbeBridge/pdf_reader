@@ -11,6 +11,7 @@
 #include "base/Win.h"
 #include "base/JsonParser.h"
 #include "base/Crypto.h"
+#include "base/Pixmap.h"
 #include "base/UITask.h"
 #if OS_WIN
 #include <wincrypt.h>
@@ -57,6 +58,8 @@
 #include "WindowTab.h"
 #include "Selection.h"
 #include "FileHistory.h"
+#include "FileThumbnails.h"
+#include "PngOptimizer.h"
 #include "Commands.h"
 #include "HomePage.h"
 #if !defined(SUMATRA_NG)
@@ -91,6 +94,7 @@ static bool gStoreLoaded = false;
 static bool gStoreFailed = false;
 static bool gLegacyReadFailed = false;
 static u64 gNoteDocumentEpoch = 0;
+static u64 gNotesViewEpoch = 0;
 
 enum class NotesStoreLoad {
     Cached,
@@ -163,6 +167,7 @@ using NotesWebBase = WebviewWnd;
 #endif
 
 struct NotesView : NotesWebBase {
+    u64 epoch = ++gNotesViewEpoch;
     MainWindow* win = nullptr;
     bool history = false;
     bool ready = false;
@@ -855,6 +860,10 @@ static void SharedLibrary(StrVec& keys, StrVec& books) {
 #endif
 }
 
+static TempStr LibraryVersion(Str path) {
+    return fmt("%llu-%lld", FileTimeToU64(file::GetModificationTime(path)), file::GetSize(path));
+}
+
 static TempStr ReadingLibraryJson() {
     NotesStoreGuard guard;
     if (!guard.locked) return {};
@@ -867,9 +876,10 @@ static TempStr ReadingLibraryJson() {
     SharedLibrary(sharedKeys, sharedBooks);
     for (int i = 0; i < len(sharedKeys); i++) {
         if (comma) b.AppendChar(',');
-        b.Append(fmt("{\"key\":%s,\"book\":%s,\"shared\":true,\"missing\":%s}", JsonQuote(sharedKeys[i]),
-                     sharedBooks[i],
-                     file::Exists(JsonField(sharedBooks[i], StrL("path"))) ? StrL("false") : StrL("true")));
+        Str path = JsonField(sharedBooks[i], StrL("path"));
+        b.Append(fmt("{\"key\":%s,\"book\":%s,\"shared\":true,\"version\":%s,\"missing\":%s}", JsonQuote(sharedKeys[i]),
+                     sharedBooks[i], JsonQuote(LibraryVersion(path)),
+                     file::Exists(path) ? StrL("false") : StrL("true")));
         comma = true;
     }
     for (int i = 0; i < len(gStoreKeys); i++) {
@@ -877,7 +887,8 @@ static TempStr ReadingLibraryJson() {
         Str path = JsonField(gStoreValues[i], StrL("path"));
         if (len(path) == 0) continue;
         if (comma) b.AppendChar(',');
-        b.Append(fmt("{\"key\":%s,\"book\":%s,\"missing\":%s}", JsonQuote(gStoreKeys[i]), gStoreValues[i],
+        b.Append(fmt("{\"key\":%s,\"book\":%s,\"version\":%s,\"missing\":%s}", JsonQuote(gStoreKeys[i]),
+                     gStoreValues[i], JsonQuote(LibraryVersion(path)),
                      file::Exists(path) ? StrL("false") : StrL("true")));
         comma = true;
     }
@@ -898,6 +909,115 @@ static bool IsLibraryPath(Str path) {
         if (str::StartsWith(gStoreKeys[i], StrL("library:")) && str::Eq(JsonField(gStoreValues[i], StrL("path")), path))
             return true;
     }
+    return false;
+}
+
+constexpr int kLibraryCoverDx = 320;
+constexpr int kLibraryCoverDy = 440;
+constexpr int kLibraryCoverMaxBytes = 2 * 1024 * 1024;
+static int gLibraryCoverTasks = 0;
+static AtomicInt gLibraryCoverSerial = 0;
+
+struct LibraryCoverTask {
+    MainWindow* win;
+    HWND frame;
+    NotesView* view;
+    u64 epoch;
+    Str id, path, cache, png;
+    bool cached = false;
+    ~LibraryCoverTask() {
+        str::Free(id);
+        str::Free(path);
+        str::Free(cache);
+        str::Free(png);
+    }
+};
+
+static void FinishLibraryCover(LibraryCoverTask* task) {
+    gLibraryCoverTasks--;
+    if (IsMainWindowValid(task->win) && NotesFrame(task->win) == task->frame) {
+        auto* notes = task->win->contextNotes;
+        auto* view = notes ? notes->history : nullptr;
+        if (view == task->view && view->epoch == task->epoch) {
+            str::Builder uri;
+            if (len(task->png)) {
+                uri.Append(StrL("data:image/png;base64,"));
+                str::AppendBase64(uri, (const u8*)task->png.s, len(task->png));
+            }
+            view->Resolve(task->id, 0,
+                          fmt("{\"image\":%s,\"cached\":%s}", JsonQuote(ToStr(uri)),
+                              task->cached ? StrL("true") : StrL("false")));
+        }
+    }
+    delete task;
+}
+
+static void LoadLibraryCover(LibraryCoverTask* task) {
+    if (file::GetSize(task->cache) <= kLibraryCoverMaxBytes) task->png = file::ReadFile(task->cache);
+    Size size = PngSizeFromData(task->png);
+    task->cached = size.dx > 0 && size.dy > 0 && size.dx <= kLibraryCoverDx && size.dy <= kLibraryCoverDy;
+    if (!task->cached) {
+        str::Free(task->png);
+        task->png = {};
+        // A private engine keeps preview rendering away from the open document.
+        // No PasswordUI: protected files retain their placeholder without a prompt.
+        EngineBase* engine = CreateEngineFromFile(task->path, nullptr, false);
+        if (engine && engine->PageCount() > 0) {
+            RectF box = engine->Transform(engine->PageMediabox(1), 1, 1.f, 0);
+            if (box.dx > 0 && box.dy > 0) {
+                float zoom = std::min(kLibraryCoverDx / box.dx, kLibraryCoverDy / box.dy);
+                RenderPageArgs args(1, zoom, 0);
+                Pixmap* image = engine->RenderPage(args);
+#if OS_WIN
+                if (image && image->format == PixmapFormat::Native) {
+                    Pixmap* copy = PixmapCopyAs32bppDIB(image);
+                    FreePixmap(image);
+                    image = copy;
+                }
+#endif
+                task->png = EncodePngFromPixmap(image);
+                FreePixmap(image);
+            }
+        }
+        SafeEngineRelease(&engine);
+        if (len(task->png) > 0 && len(task->png) <= kLibraryCoverMaxBytes) {
+            Str dir = path::GetDirTemp(task->cache);
+            bool ok = dir::CreateAll(dir);
+#if !OS_WIN
+            ok = ok && chmod(CStrTemp(dir), 0700) == 0;
+#endif
+            Str temp = fmt("%s.%d.%d.tmp", task->cache, (int)CurrentProcessId(), AtomicIntInc(&gLibraryCoverSerial));
+            ok = ok && file::WriteFile(temp, task->png);
+#if !OS_WIN
+            ok = ok && chmod(CStrTemp(temp), 0600) == 0;
+#endif
+            if (!ok || !file::RenameReplace(task->cache, temp)) file::Delete(temp);
+        }
+    }
+    uitask::Post(MkFunc0(FinishLibraryCover, task), "LibraryCover");
+    AtomicIntDec(&gDangerousThreadCount);
+}
+
+static bool StartLibraryCover(NotesView* view, Str id, Str path) {
+    if (!view->history || !CanAccessDisk() || gPluginMode || !IsLibraryPath(path) || !file::Exists(path)) return false;
+    constexpr int kMaxLibraryCoverTasks = 4;
+    if (gLibraryCoverTasks >= kMaxLibraryCoverTasks) return false;
+    u8 digest[16];
+    CalcMD5Digest(fmt("first-page-v1:%s:%s", path, LibraryVersion(path)), digest);
+    Str name = str::JoinTemp(str::MemToHexTemp(Str((char*)digest, sizeof(digest))), StrL(".png"));
+    Str cache = path::JoinTemp(GetPathInAppDataDirTemp(StrL("library-covers")), name);
+    auto* task = new LibraryCoverTask{view->win,      NotesFrame(view->win), view, view->epoch, str::Dup(id),
+                                      str::Dup(path), str::Dup(cache),       {}};
+    gLibraryCoverTasks++;
+    AtomicIntInc(&gDangerousThreadCount);
+    ThreadHandle thread = StartThread(MkFunc0(LoadLibraryCover, task), StrL("LibraryCover"));
+    if (thread) {
+        SafeCloseThreadHandle(&thread);
+        return true;
+    }
+    AtomicIntDec(&gDangerousThreadCount);
+    gLibraryCoverTasks--;
+    delete task;
     return false;
 }
 
@@ -1032,6 +1152,9 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
     } else if (str::Eq(action, StrL("libraryPicker"))) {
         uitask::Post(MkFunc0(PickLibraryBooks, new LibraryPickTask{win, view, str::Dup(id)}), "LibraryPicker");
         return;
+    } else if (str::Eq(action, StrL("libraryCover"))) {
+        if (StartLibraryCover(view, id, JsonField(data, StrL("path")))) return;
+        result = StrL("{\"image\":\"\"}");
     } else if (str::Eq(action, StrL("read"))) {
         NotesStoreGuard guard;
         if (guard.locked) {

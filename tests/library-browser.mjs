@@ -66,15 +66,24 @@ try {
           return { dark: false };
         case "history":
           return documents;
+        case "read":
+          return store;
+        case "libraryCover":
+          return {
+            image:
+              "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+          };
         case "library":
           libraryCalls++;
           return [
             ...shared,
-            ...Object.entries(store).map(([key, book]) => ({
-              key,
-              book,
-              missing: book.path.includes("missing"),
-            })),
+            ...Object.entries(store)
+              .filter(([key]) => key.startsWith("library:"))
+              .map(([key, book]) => ({
+                key,
+                book,
+                missing: book.path.includes("missing"),
+              })),
           ];
         case "libraryPicker":
           return picked;
@@ -107,6 +116,11 @@ try {
     await page.goto(`http://127.0.0.1:${server.address().port}/history.html`);
     await page.locator(".row").waitFor();
     assert.equal(libraryCalls, 0, "library does not slow down history startup");
+    assert.equal(
+      calls.filter((call) => call.action === "libraryCover").length,
+      0,
+      "history startup never renders library covers",
+    );
     await page.locator("#library").click();
     await page.locator("#library-empty").waitFor({ state: "visible" });
     picked = [
@@ -192,6 +206,32 @@ try {
     assert.equal(await sharedCard.locator(".book-remove").count(), 0);
     await sharedCard.locator(".book-title").click();
     assert.equal(calls.at(-1).path, shared[0].book.path);
+    await sharedCard.locator(".book-cover img").waitFor();
+    await page.locator("#library-view-list").click({ timeout: 1000 });
+    await page.waitForFunction(
+      () => document.querySelector("#books").dataset.view === "list",
+    );
+    assert.equal(
+      await page.locator("#library-view-list").getAttribute("aria-pressed"),
+      "true",
+    );
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll(".book-cover img")].some(
+        (img) => img.complete && img.naturalWidth > 0,
+      ),
+    );
+    await page.screenshot({
+      path: resolve(output, `library-list-${locale}.png`),
+    });
+    await page.reload();
+    await page.locator("#library").click();
+    await page.waitForFunction(
+      () => document.querySelector("#books").dataset.view === "list",
+    );
+    await page.locator("#library-view-grid").click();
+    await page.waitForFunction(
+      () => document.querySelector("#books").dataset.view === "grid",
+    );
     await page.screenshot({ path: resolve(output, `library-${locale}.png`) });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(
@@ -203,11 +243,24 @@ try {
     await page.screenshot({
       path: resolve(output, `library-narrow-${locale}.png`),
     });
+    await page.locator("#library-view-list").click();
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "dark";
+    });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+    );
+    await page.screenshot({
+      path: resolve(output, `library-list-dark-narrow-${locale}.png`),
+    });
     assert.deepEqual(errors, []);
     await context.close();
   }
   console.log(
-    "PASS: local library batch add, duplicate prevention, search/open, removal/undo, restart, missing files, safe names, lazy loading and narrow layout in Chinese and English.",
+    "PASS: library add/search/open/undo, shared entries, lazy covers, grid/list persistence and narrow layouts in Chinese and English.",
   );
 } finally {
   await browser.close();

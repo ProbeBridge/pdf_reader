@@ -177,7 +177,7 @@ static Vec<gp::Entity<NotesPanelView>> gPanelViews;
 void NotesPanelDestroy(MainWindow* win) {
     int idx = VecFind(gPanelWindows, win);
     if (idx < 0) return;
-    gp::EntityDrop(win->gpuiWin->app, gPanelViews[idx].id);
+    gp::EntityDrop(AppShellGetApp(), gPanelViews[idx].id);
     VecRemoveAt(gPanelWindows, idx);
     VecRemoveAt(gPanelViews, idx);
 }
@@ -260,7 +260,9 @@ enum class ActionLookup {
     Create
 };
 static gp::Entity<NotesActionsView> ActionView(MainWindow* win, ActionLookup lookup) {
-    auto* app = win->gpuiWin->app;
+    // Native close notifications may clear gpuiWin before notes are destroyed.
+    // These entities belong to the application, which still owns their lifetime.
+    auto* app = AppShellGetApp();
     for (auto entity : gNoteActionViews)
         if (entity.Get(app)->win == win) return entity;
     if (lookup == ActionLookup::Existing) return {};
@@ -270,7 +272,7 @@ static gp::Entity<NotesActionsView> ActionView(MainWindow* win, ActionLookup loo
     return entity;
 }
 static NotesActionsView* Actions(MainWindow* win) {
-    return ActionView(win, ActionLookup::Existing).Get(win->gpuiWin->app);
+    return ActionView(win, ActionLookup::Existing).Get(AppShellGetApp());
 }
 void HideContextNoteActions(MainWindow* win) {
     auto* view = Actions(win);
@@ -288,12 +290,12 @@ void DestroyContextNoteActions(MainWindow* win) {
             break;
         }
     }
-    gp::EntityDrop(win->gpuiWin->app, entity.id);
+    gp::EntityDrop(AppShellGetApp(), entity.id);
 }
 void ShowContextNoteActions(MainWindow* win, Str id, Point anchor) {
     auto* model = win->AsFixed();
     if (!model || win->InPresentation()) return;
-    auto* view = ActionView(win, ActionLookup::Create).Get(win->gpuiWin->app);
+    auto* view = ActionView(win, ActionLookup::Create).Get(AppShellGetApp());
     if (str::Eq(view->id, id)) return;
     str::ReplaceWithCopy(&view->id, id);
     view->anchor = anchor;
