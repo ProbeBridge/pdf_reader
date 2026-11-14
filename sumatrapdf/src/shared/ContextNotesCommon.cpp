@@ -395,7 +395,16 @@ static void DispatchNotes(NotesView* view, Str name, Str json) {
 }
 
 TempStr ContextNotesThemeJsonTemp() {
-    return IsLightColor(ThemeWindowBackgroundColor()) ? StrL("{\"dark\":false}") : StrL("{\"dark\":true}");
+    Color background = ThemeWindowControlBackgroundColor();
+    Color text = ThemeWindowTextColor();
+    Color muted = ThemeWindowDarkerTextColor();
+    Color border = ThemeEdgeColor();
+    return fmt(
+        "{\"dark\":%s,\"background\":\"#%02x%02x%02x\",\"text\":\"#%02x%02x%02x\","
+        "\"muted\":\"#%02x%02x%02x\",\"border\":\"#%02x%02x%02x\"}",
+        IsLightColor(background) ? StrL("false") : StrL("true"), GetRed(background), GetGreen(background),
+        GetBlue(background), GetRed(text), GetGreen(text), GetBlue(text), GetRed(muted), GetGreen(muted),
+        GetBlue(muted), GetRed(border), GetGreen(border), GetBlue(border));
 }
 
 bool ContextNotesThemeCall(Str action, Str& result) {

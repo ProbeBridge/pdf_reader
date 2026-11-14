@@ -205,6 +205,42 @@ export async function testit() {
     );
     console.log("PASS dark/light theme changes stay synchronized between native notes and reflow");
 
+    const colors = ["#faf9f5", "#ffffff", "#f5f1e8", "#e8f0e4", "#e8eff5", "#000000"];
+    for (const [index, background] of colors.entries()) {
+      const r = toolbarRect(await request("TestToolbarButtons"), "Background Color");
+      await request("TestInput", "click", Math.round((r[0]! + r[2]!) / 2), Math.round((r[1]! + r[3]!) / 2));
+      const menu = await until(
+        () => request("TestToolbarButtons"),
+        (s) => /dropdown cmd=\d+ items=6\b/.test(s),
+      );
+      assert.equal(menu.split("\n").filter((line) => line.startsWith("dropdown-item ")).length, 6);
+      assert.equal(menu.split("\n").filter((line) => /^dropdown-item .* current=1 /.test(line)).length, 1);
+      if (language === "cn")
+        for (const name of ["米白", "纯白", "米黄", "浅绿", "浅蓝"]) assert.ok(menu.includes(`text=${name}`));
+      const row = new RegExp(`dropdown-dip idx=${index} rect=(-?\\d+),(-?\\d+),(-?\\d+),(-?\\d+)`)
+        .exec(menu)!
+        .slice(1)
+        .map(Number);
+      await request("TestInput", "click", Math.round((row[0]! + row[2]!) / 2), Math.round((row[1]! + row[3]!) / 2));
+      await until(
+        async () =>
+          String((await evaluate("reflow", "__sumatra__.call('reflow',JSON.stringify({action:'theme'}))")).background),
+        (s) => s === background,
+      );
+      const rgb = background
+        .slice(1)
+        .match(/../g)!
+        .map((value) => parseInt(value, 16));
+      for (const surface of ["reflow", "notes"]) {
+        const actual = await until(
+          async () => String(await evaluate(surface, "getComputedStyle(document.documentElement).backgroundColor")),
+          (s) => s === `rgb(${rgb.join(", ")})`,
+        );
+        assert.equal(actual, `rgb(${rgb.join(", ")})`);
+      }
+    }
+    console.log("PASS six toolbar background swatches synchronize native theme, notes and reflow");
+
     await request("TestInvokeCommand", "CmdZoomIn");
     await until(
       async () => String(await evaluate("reflow", "document.querySelector('#page-label').textContent")),

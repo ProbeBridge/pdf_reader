@@ -7,6 +7,20 @@ let followsSystem = true;
 function applyTheme(theme) {
   if (typeof theme?.dark !== "boolean") return;
   root.dataset.theme = theme.dark ? "dark" : "light";
+  for (const [key, property] of Object.entries({
+    background: "--surface",
+    text: "--text",
+    muted: "--muted",
+    border: "--border",
+  })) {
+    const color = theme[key];
+    if (typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) root.style.setProperty(property, color);
+    else root.style.removeProperty(property);
+  }
+  for (const property of ["--history-background", "--search-background"]) {
+    if (/^#[0-9a-f]{6}$/i.test(theme.background || "")) root.style.setProperty(property, theme.background);
+    else root.style.removeProperty(property);
+  }
   for (const button of document.querySelectorAll("[data-theme-toggle]")) {
     const label = theme.dark
       ? zh

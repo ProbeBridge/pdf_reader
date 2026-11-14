@@ -444,6 +444,7 @@ static ToolbarButtonInfo gToolbarButtons[] = {
     {gIconZoomIn, CmdZoomIn, TrN("Zoom In")},
     {gIconLayoutContinuous, CmdToggleDocumentReflow, TrN("Reflow document text")},
     {gIconTheme, CmdToggleLightDarkTheme, TrN("Toggle Light/Dark Theme")},
+    {nullptr, CmdChangeTheme, TrN("Background Color"), {}, true},
     {nullptr, 0, {}}, // separator
     {gIconSearch, CmdFindFirst, TrN("Find")},
     {nullptr, 0, {}}, // separator

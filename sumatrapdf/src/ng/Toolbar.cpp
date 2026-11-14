@@ -607,7 +607,8 @@ static bool CmdIsAnnotColorDropdown(int cmdId) {
 }
 
 static bool CmdHasHoverDropdown(int cmdId) {
-    return cmdId == CmdZoomIn || cmdId == CmdZoomOut || cmdId == CmdSaveAnnotations || CmdIsAnnotColorDropdown(cmdId);
+    return cmdId == CmdZoomIn || cmdId == CmdZoomOut || cmdId == CmdSaveAnnotations || cmdId == CmdChangeTheme ||
+           CmdIsAnnotColorDropdown(cmdId);
 }
 
 void HideToolbarHoverDropdown(MainWindow* win) {
@@ -783,6 +784,46 @@ static gp::El* BuildSaveHoverMenu(MainWindow* win, gp::Ctx* cx) {
     gp::El* box = NewToolbarHoverMenu(win, cx, items);
     // under the button, left edges aligned
     box->Left((float)anchor.x)->Top((float)anchor.Bottom());
+    return box;
+}
+
+static gp::El* BuildReadingBackgroundMenu(MainWindow* win, gp::Ctx* cx) {
+    Rect anchor = GetToolbarButtonRect(win, CmdChangeTheme);
+    if (anchor.IsEmpty()) return nullptr;
+    ToolbarUI* ui = Ui(win);
+    Vec<ReadingBackground> presets;
+    GetReadingBackgrounds(presets);
+    BeginHoverDump(ui, len(presets));
+    gp::El* box = gp::Div(cx->a)
+                      ->FlexCol()
+                      ->Absolute()
+                      ->Bg(ToGpui(TbBgColor()))
+                      ->Border(1, ToGpui(ThemeEdgeColor()))
+                      ->BoundsOut(&ui->hoverBox)
+                      ->Left((float)anchor.x)
+                      ->Top((float)anchor.Bottom())
+                      ->OnHover(gp::ListenTo(ui->view, &ToolbarView::OnStripHover));
+    for (const auto& preset : presets) {
+        auto* slot = AddHoverDumpItem(ui, preset.cmdId, preset.label, preset.selected, false);
+        gp::El* row = gp::Div(cx->a)
+                          ->FlexRow()
+                          ->ItemsCenter()
+                          ->Gap(10)
+                          ->PadX(12)
+                          ->PadY(7)
+                          ->MinW(170)
+                          ->HoverBg(ToGpui(TbHoverColor()))
+                          ->BoundsOut(&slot->bounds)
+                          ->PathClick(GpuiDup(cx->a, fmt("reading-bg-%d", preset.cmdId)))
+                          ->OnClick(gp::ListenTo(ui->view, &ToolbarView::OnStripCell, (intptr_t)preset.cmdId));
+        row->Child(gp::Div(cx->a)
+                       ->W(20)
+                       ->H(20)
+                       ->Bg(ToGpui(preset.color))
+                       ->Border(preset.selected ? 3 : 1, ToGpui(TbTextColor())));
+        row->Child(gp::TextEl(cx->a, GpuiDup(cx->a, preset.label))->Font(13)->Fg(ToGpui(TbTextColor())));
+        box->Child(row);
+    }
     return box;
 }
 
@@ -1500,6 +1541,7 @@ gp::El* ToolbarOverlayBuild(MainWindow* win, gp::Ctx* cx) {
     if (!tb || tb->hoverCmdId == 0) {
         return nullptr;
     }
+    if (tb->hoverCmdId == CmdChangeTheme) return BuildReadingBackgroundMenu(win, cx);
     if (tb->hoverCmdId == CmdSaveAnnotations) {
         return BuildSaveHoverMenu(win, cx);
     }
@@ -1521,6 +1563,18 @@ void ToolbarView::OnButton(ToolbarView* self, gp::Ctx* cx, const gp::ClickEvent*
         return;
     }
     int cmdId = ui->btnCmds[(int)idx];
+    if (cmdId == CmdChangeTheme) {
+        auto* tb = Tb(win);
+        bool open = tb->hoverCmdId == cmdId;
+        HideToolbarHoverDropdown(win);
+        if (!open) {
+            tb->hoverCmdId = tb->hoverAnchorCmdId = cmdId;
+            tb->hoverGen++;
+            HoverTooltipHide(cx);
+        }
+        gp::Notify(cx);
+        return;
+    }
     if (cmdId == CmdToggleReadAloud) {
         if (ui->ttsMenuWasOpen) {
             ui->ttsMenuWasOpen = false;

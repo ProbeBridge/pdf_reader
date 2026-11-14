@@ -7,9 +7,6 @@
   --reading-paragraph-gap: 1em;
   --reading-letter-spacing: 0em;
   --reading-word-spacing: 0em;
-  --reading-surface: #faf9f5;
-}
-:root[data-theme="dark"] {
   --reading-surface: var(--surface);
 }
 * {
@@ -38,14 +35,14 @@ nav {
   flex-wrap: wrap;
   gap: 6px;
   padding: 6px 12px;
-  background: Canvas;
+  background: var(--surface);
   border-bottom: 1px solid GrayText;
   font-size: 12px;
 }
 button {
   font: inherit;
   color: inherit;
-  background: ButtonFace;
+  background: var(--surface);
   border: 1px solid GrayText;
   border-radius: 5px;
   padding: 3px 7px;

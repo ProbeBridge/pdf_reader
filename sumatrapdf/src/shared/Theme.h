@@ -7,6 +7,14 @@ void SetThemeByIndex(int themeIdx);
 int ThemeGetCount();
 Str ThemeGetNameAt(int idx);
 int ThemeGetCurrentIndex();
+struct ReadingBackground {
+    Str label;
+    Color color;
+    int cmdId;
+    bool selected;
+};
+void GetReadingBackgrounds(Vec<ReadingBackground>& out);
+
 void ToggleLightDarkTheme();
 Str ToggleLightDarkThemeTargetName();
 void SumatraUpdateTheme();

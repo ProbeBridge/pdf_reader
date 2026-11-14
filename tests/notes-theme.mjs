@@ -37,6 +37,7 @@ const browser = await chromium.launch({ headless: true });
 const errors = [];
 let dark = false;
 let failTheme = false;
+let palette;
 const doc = {
   key: "theme-document",
   title: "Theme sample.pdf",
@@ -72,11 +73,9 @@ try {
         .filter((page) => page.url().startsWith("http://127.0.0.1:"))
         .map((page) =>
           page.evaluate(
-            (dark) =>
-              dispatchEvent(
-                new CustomEvent("themechange", { detail: { dark } }),
-              ),
-            dark,
+            (theme) =>
+              dispatchEvent(new CustomEvent("themechange", { detail: theme })),
+            { dark, ...palette },
           ),
         ),
     );
@@ -91,7 +90,7 @@ try {
           dark = !dark;
           await broadcast();
         }
-        return { dark };
+        return { dark, ...palette };
       }
       if (request.action === "read") return store;
       if (request.action === "ready")
@@ -315,6 +314,55 @@ try {
     await history.locator("[data-theme-toggle]").getAttribute("title"),
     "Theme update failed",
   );
+  failTheme = false;
+  for (const [name, background, text, isDark] of [
+    ["cream", "#faf9f5", "#202124", false],
+    ["white", "#ffffff", "#202124", false],
+    ["sepia", "#f5f1e8", "#333333", false],
+    ["green", "#e8f0e4", "#202124", false],
+    ["blue", "#e8eff5", "#202124", false],
+    ["dark", "#000000", "#f9fafb", true],
+  ]) {
+    dark = isDark;
+    palette = {
+      background,
+      text,
+      muted: isDark ? "#9ca3af" : "#5f6368",
+      border: isDark ? "#374151" : "#aaaabb",
+    };
+    await broadcast();
+    for (const page of pages) {
+      const actual = await page.locator("body").evaluate((element) => {
+        for (let node = element; node; node = node.parentElement) {
+          const color = getComputedStyle(node).backgroundColor;
+          if (color !== "transparent" && color !== "rgba(0, 0, 0, 0)")
+            return color;
+        }
+      });
+      const rgb = background
+        .slice(1)
+        .match(/../g)
+        .map((value) => parseInt(value, 16));
+      assert.equal(
+        actual,
+        `rgb(${rgb.join(", ")})`,
+        `${name}: notes, history and body share the selected background`,
+      );
+    }
+    assert.ok((await contrast(notes, ".meaning")).ratio >= 4.5, name);
+    assert.ok((await contrast(reflow, ".page-content p")).ratio >= 4.5, name);
+    assert.equal(
+      await notes.locator(".card").count(),
+      1,
+      "Background selection retains annotations",
+    );
+    if (name === "green") {
+      await reflow.screenshot({
+        path: resolve(artifacts, "reading-green.png"),
+      });
+      await notes.screenshot({ path: resolve(artifacts, "notes-green.png") });
+    }
+  }
   assert.deepEqual(errors, []);
   console.log(
     `PASS: ${locale} UI; synchronized themes; readable controls; calendar day/week/month/year charts with all three metrics; narrow layout; failure recovery.`,

@@ -1085,6 +1085,10 @@ static void OnToolbarButtonClicked(MainWindow* win, VirtMouseEvent* ev) {
     if (tbv && IsPlacingAnnotation(win) && VecContains(tbv->annotationItems, w)) {
         return;
     }
+    if (cmdId == CmdChangeTheme && ShowToolbarButtonDropdown(win, cmdId)) {
+        ev->didHandle = true;
+        return;
+    }
     // right-click: the drop-down, not the button's command
     if (ev->button == 1) {
         if (ShowToolbarButtonDropdown(win, cmdId)) {
@@ -1831,6 +1835,25 @@ static void ToolbarZoomLevels(MainWindow* win, Vec<ZoomHoverLevel>& levels) {
             VecAppend(levels, level);
         }
     }
+}
+
+static void BuildReadingBackgroundMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
+    Vec<ReadingBackground> presets;
+    GetReadingBackgrounds(presets);
+    Vec<ToolbarHoverMenuItem> items;
+    for (const auto& preset : presets) {
+        ToolbarHoverMenuItem item;
+        item.text = preset.selected ? fmt("✓ %s", preset.label) : preset.label;
+        item.svgIcon =
+            fmt("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">"
+                "<rect x=\"2\" y=\"2\" width=\"20\" height=\"20\" fill=\"#%02x%02x%02x\" "
+                "stroke=\"currentColor\" stroke-width=\"%d\"/></svg>",
+                GetRed(preset.color), GetGreen(preset.color), GetBlue(preset.color), preset.selected ? 3 : 1);
+        item.cmdId = preset.cmdId;
+        item.isCurrent = preset.selected;
+        VecAppend(items, item);
+    }
+    ev->layout = NewToolbarHoverMenu(win, items);
 }
 
 static void BuildZoomHoverMenu(MainWindow* win, ToolbarHoverBuildEvent* ev) {
@@ -2791,6 +2814,7 @@ static void BuildToolbarLayout(MainWindow* win) {
     }
 
     SetToolbarHoverDropdown(win, CmdSaveAnnotations, MkFunc1(BuildSaveHoverMenu, win));
+    SetToolbarHoverDropdown(win, CmdChangeTheme, MkFunc1(BuildReadingBackgroundMenu, win));
     // one strip for the two of them, so it doesn't jump when the mouse crosses
     // from one to the other
     SetToolbarHoverDropdown(win, CmdZoomIn, MkFunc1(BuildZoomHoverMenu, win), CmdZoomIn);

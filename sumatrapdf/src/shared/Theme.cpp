@@ -39,8 +39,8 @@ static Str themesTxt = StrL(R"(Themes [
         Name = Light
         TextColor = #000000
         BackgroundColor = #f2f2f2
-        ControlBackgroundColor = #ffffff
-        ActiveTabBackgroundColor = #ffffff
+        ControlBackgroundColor = #faf9f5
+        ActiveTabBackgroundColor = #faf9f5
         InactiveTabBackgroundColor = #e6e6e6
         LinkColor = #0020a0
         DisabledTextColor = #808080
@@ -53,7 +53,7 @@ static Str themesTxt = StrL(R"(Themes [
         NotificationBackgroundColor = #fafafa
         NotificationHighlightColor = #ffee70
         NotificationHighlightTextColor = #8d0801
-        ColorizeControls = false
+        ColorizeControls = true
     ]
     [
         Name = Dark
@@ -475,6 +475,42 @@ static Str themesTxt = StrL(R"(Themes [
         NotificationHighlightTextColor = #ffcb6b
         ColorizeControls = true
     ]
+    [
+        Name = Reading White
+        TextColor = #202124
+        BackgroundColor = #ffffff
+        ControlBackgroundColor = #ffffff
+        ActiveTabBackgroundColor = #ffffff
+        LinkColor = #0020a0
+        DisabledTextColor = #707479
+        DarkerTextColor = #5f6368
+        EdgeColor = #aaaabb
+        ColorizeControls = true
+    ]
+    [
+        Name = Reading Green
+        TextColor = #202124
+        BackgroundColor = #e8f0e4
+        ControlBackgroundColor = #e8f0e4
+        ActiveTabBackgroundColor = #e8f0e4
+        LinkColor = #0020a0
+        DisabledTextColor = #707479
+        DarkerTextColor = #5f6368
+        EdgeColor = #aaaabb
+        ColorizeControls = true
+    ]
+    [
+        Name = Reading Blue
+        TextColor = #202124
+        BackgroundColor = #e8eff5
+        ControlBackgroundColor = #e8eff5
+        ActiveTabBackgroundColor = #e8eff5
+        LinkColor = #0020a0
+        DisabledTextColor = #707479
+        DarkerTextColor = #5f6368
+        EdgeColor = #aaaabb
+        ColorizeControls = true
+    ]
 ]
 )");
 
@@ -621,6 +657,31 @@ Str ThemeGetNameAt(int idx) {
 
 int ThemeGetCurrentIndex() {
     return gCurrThemeIndex;
+}
+
+void GetReadingBackgrounds(Vec<ReadingBackground>& out) {
+    struct Preset {
+        Str name;
+        Str label;
+    };
+    const Preset presets[] = {
+        {StrL("Light"), Tr("Cream")},
+        {StrL("Reading White"), Tr("White")},
+        {StrL("Light Warm"), Tr("Sepia")},
+        {StrL("Reading Green"), Tr("Soft Green")},
+        {StrL("Reading Blue"), Tr("Soft Blue")},
+        {StrL("Dark"), Tr("Dark")},
+    };
+    VecReset(out);
+    for (const auto& preset : presets) {
+        for (int i = gThemeCount - 1; i >= 0; i--) {
+            auto* theme = (*gThemes)[i];
+            if (!str::EqI(theme->name, preset.name)) continue;
+            VecAppend(out, ReadingBackground{preset.label, GetParsedColor(theme->controlBackgroundColor, kColWhite),
+                                             gFirstSetThemeCmdId + i, i == gCurrThemeIndex});
+            break;
+        }
+    }
 }
 
 void SetThemeByIndex(int themeIdx) {
@@ -829,10 +890,10 @@ void SetCurrentThemeFromSettings() {
     ParsedColor* bgParsed = GetPrefsColor(gSettings->mainWindowBackground);
     bool isDefault = IsDefaultMainWinColor(bgParsed);
     if (isDefault) {
-        gThemeLight->colorizeControls = false;
+        gThemeLight->colorizeControls = true;
         gThemeLight->controlBackgroundColor.wasParsed = true;
         gThemeLight->controlBackgroundColor.parsedOk = true;
-        gThemeLight->controlBackgroundColor.col = kColWhite;
+        gThemeLight->controlBackgroundColor.col = MkRgb(250, 249, 245);
     } else if (bgParsed->parsedOk) {
         gThemeLight->colorizeControls = true;
         gThemeLight->controlBackgroundColor.wasParsed = true;
