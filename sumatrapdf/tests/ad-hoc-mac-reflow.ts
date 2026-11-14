@@ -1,7 +1,7 @@
 // Run from sumatrapdf/: ../node_modules/.bin/bun tests/ad-hoc-mac-reflow.ts
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect, sendCommand, controlCommands as C } from "../cmd/ng-dbg-control.ts";
@@ -9,6 +9,11 @@ import { connect, sendCommand, controlCommands as C } from "../cmd/ng-dbg-contro
 export async function testit() {
   const dir = mkdtempSync(join(tmpdir(), "sumatra-mac-reflow-"));
   const pipe = `reflow-${process.pid}-${Date.now()}`;
+  const source = resolve("ext/a-zlib/zlib.3.pdf");
+  const bookPath = join(dir, "Unopened library book.pdf");
+  const book = { path: bookPath, name: "Unopened library book.pdf", addedAt: Date.now() };
+  const bookKey = `library:${bookPath}`;
+  copyFileSync(source, bookPath);
   writeFileSync(
     join(dir, "SumatraPDF-settings.txt"),
     "RestoreSession = false\nCheckForUpdates = false\nUiLanguage = cn\nTheme = Light\n",
@@ -24,7 +29,7 @@ export async function testit() {
       pipe,
       "-log-to-file",
       join(dir, "app.log"),
-      resolve("ext/a-zlib/zlib.3.pdf"),
+      source,
     ],
     { stdio: "ignore" },
   );
@@ -40,6 +45,8 @@ export async function testit() {
           timer = setTimeout(() => reject(new Error(`${cmd} timeout`)), 15000);
         }),
       ]).finally(() => clearTimeout(timer));
+      if (cmd === "TestCurrentTab" && reply[0] === 2 && String(reply[1]).startsWith("NOTREADY"))
+        return String(reply[1]);
       assert.equal(reply[0], 0, `${cmd}: ${reply}`);
       return String(reply[1] ?? "");
     };
@@ -66,6 +73,8 @@ export async function testit() {
       assert.equal(result.ok, true, JSON.stringify(result));
       return result.value;
     };
+    const call = (action: unknown) => `__sumatra__.call('notes',${JSON.stringify(JSON.stringify(action))})`;
+    const reflowCall = (action: unknown) => `__sumatra__.call('reflow',${JSON.stringify(JSON.stringify(action))})`;
     const toolbarRect = (dump: string, tip: string) => {
       const row = dump.split("\n").find((line) => line.startsWith("idx=") && line.includes(`text=${tip}`));
       assert.ok(row, `${tip} is missing from the toolbar`);
@@ -132,6 +141,42 @@ export async function testit() {
     assert.equal(await evaluate("reflow", "document.querySelector('#original').textContent"), originalLabel);
     console.log("PASS visible text switch opens real PDF reflow; View menu and check state are available");
 
+    for (const close of [
+      { action: "close" },
+      { action: "close", page: 1 },
+      { action: "close", page: 1, glyph: null, x: null, y: null },
+      { action: "close", page: 1, glyph: "bad", x: "bad", y: 0 },
+      { action: "close", page: 1, glyph: -1, x: 1e200, y: 0 },
+    ]) {
+      await request("TestUiState", "notes", "reflow", reflowCall(close));
+      await until(
+        () => request("TestUiState"),
+        (s) => s.includes("reflowVisible=0"),
+      );
+      assert.ok((await request("TestCurrentTab")).includes("zlib.3.pdf"));
+      await clickReflow();
+      await until(
+        () => request("TestUiState"),
+        (s) => s.includes("reflowVisible=1"),
+      );
+    }
+    for (const page of [undefined, null, "1", 2147483648]) {
+      const error = await evaluate(
+        "reflow",
+        `${reflowCall({ action: "page", page })}.then(()=>false,error=>String(error))`,
+      );
+      assert.match(error, /Invalid page/);
+    }
+    for (const action of [
+      { action: "position" },
+      { action: "position", page: 2 },
+      { action: "zoom" },
+      { action: "zoom", zoom: null },
+    ])
+      assert.equal(await evaluate("reflow", reflowCall(action)), true);
+    assert.ok((await evaluate("reflow", "document.querySelector('#page-label').textContent")).includes("100%"));
+    console.log("PASS reflow handles missing, partial, null and invalid numeric data without losing the document");
+
     await evaluate("reflow", "(document.querySelector('[data-theme-toggle]').click(),true)");
     await until(
       async () => String(await evaluate("reflow", "document.documentElement.dataset.theme")),
@@ -176,6 +221,85 @@ export async function testit() {
     );
     await reflowMenu(false);
     console.log("PASS reflow zoom, web return button, Command-Shift-R and native toolbar toggles");
+
+    await request("TestInvokeCommand", "CmdReadingHistory");
+    await until(
+      () => request("TestUiState"),
+      (s) => /page=0\b/.test(s),
+    );
+    assert.deepEqual(await evaluate("history", call({ action: "library" })), []);
+    assert.equal(
+      await evaluate("history", call({ action: "write", key: bookKey, value: JSON.stringify(book), expected: "null" })),
+      true,
+    );
+    await evaluate("history", "(document.querySelector('#library').click(),true)");
+    await until(
+      async () => String(await evaluate("history", "document.querySelector('.book-title')?.textContent")),
+      (s) => s === book.name,
+    );
+    await request("TestUiState", "notes", "history", "document.querySelector('.book-title').click()");
+    await until(
+      () => request("TestCurrentTab"),
+      (s) => s.includes(book.name),
+    );
+    await request("TestInvokeCommand", "CmdReadingHistory");
+    await until(
+      () => request("TestUiState"),
+      (s) => /page=0\b/.test(s),
+    );
+    renameSync(bookPath, bookPath + ".moved");
+    assert.equal((await evaluate("history", call({ action: "library" })))[0].missing, true);
+    const missing = await evaluate(
+      "history",
+      `${call({ action: "open", path: bookPath })}.then(()=>false,error=>String(error))`,
+    );
+    assert.match(missing, /moved|unavailable/);
+    await evaluate("history", "(document.querySelector('#library').click(),true)");
+    await until(
+      async () => String(await evaluate("history", "document.querySelectorAll('.book-status:not([hidden])').length")),
+      (s) => s === "1",
+    );
+    await evaluate("history", "(document.querySelector('.book-remove').click(),true)");
+    await until(
+      async () => String(await evaluate("history", "document.querySelectorAll('.book-card').length")),
+      (s) => s === "0",
+    );
+    assert.ok(existsSync(bookPath + ".moved"));
+    await evaluate("history", "(document.querySelector('#toast button').click(),true)");
+    await until(
+      async () => String(await evaluate("history", "document.querySelectorAll('.book-card').length")),
+      (s) => s === "1",
+    );
+    assert.deepEqual(readFileSync(bookPath + ".moved"), readFileSync(source));
+    console.log(
+      "PASS native library opens a new file, detects missing files, removes/undoes entries and preserves source bytes",
+    );
+    for (let i = 0; i < 2; i++)
+      await evaluate(
+        "history",
+        call({ action: "recordVocabulary", id: "native-calendar-note", createdAt: Date.now() }),
+      );
+    await evaluate("history", "(document.querySelector('#statistics').click(),true)");
+    await until(
+      async () => String(await evaluate("history", "document.querySelector('[data-stat=words]')?.textContent")),
+      (s) => s === "1",
+    );
+    assert.equal(await evaluate("history", "document.querySelectorAll('.stats-chart').length"), 1);
+    for (const period of ["day", "week", "month", "year"]) {
+      await evaluate(
+        "history",
+        `(()=>{const range=document.querySelector('#stats-range');range.value=${JSON.stringify(period)};range.dispatchEvent(new Event('change'));return true})()`,
+      );
+      assert.equal(await evaluate("history", "document.querySelectorAll('.stats-legend-item').length"), 3);
+      for (const metric of ["pages", "annotations", "seconds"])
+        assert.equal(
+          await evaluate("history", `document.querySelectorAll('.stats-bar[data-metric=${metric}]').length`),
+          period === "day" ? 14 : period === "year" ? 5 : 12,
+        );
+    }
+    console.log(
+      "PASS native combined calendar chart renders pages, annotation count and reading time at every interval",
+    );
     await request("Quit");
     await exited;
   } finally {

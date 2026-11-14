@@ -10,6 +10,7 @@
 #include "base/Win.h"
 #include "base/JsonParser.h"
 #include "base/UITask.h"
+#include <cmath>
 #if !OS_WIN
 #include <sys/stat.h>
 #include <unistd.h>
@@ -114,6 +115,31 @@ static TempStr ReflowField(Str data, Str key) {
     return {};
 }
 
+static bool ReflowNumber(Str data, Str key, double& result) {
+    json::Reader reader(data);
+    Str segment = str::JoinTemp(StrL("/"), key);
+    Str number;
+    for (json::Value& value : reader)
+        if (json::PathMatch(value.path, segment) && value.type == json::Type::Number)
+            number = str::DupTemp(value.value);
+    if (!reader.Ok() || len(number) == 0) return false;
+    char* text = CStrTemp(number);
+    char* end = nullptr;
+    double parsed = strtod(text, &end);
+    if (end == text || *end != 0 || !std::isfinite(parsed)) return false;
+    result = parsed;
+    return true;
+}
+
+static int ReflowInt(Str data, Str key, int fallback = 0) {
+    double number;
+    if (!ReflowNumber(data, key, number) || number < INT_MIN || number > INT_MAX) return fallback;
+    int result = (int)number;
+    return number == result ? result : fallback;
+}
+
+static constexpr double kReflowCoordLimit = 1e6;
+
 static TempStr CenterJson(const ReflowCenter& center) {
     return fmt("{\"page\":%d,\"glyph\":%d,\"x\":%g,\"y\":%g}", center.page, center.glyph, center.x, center.y);
 }
@@ -148,17 +174,22 @@ static void ShowOriginalCenter(ReflowView* view, Str data) {
     auto* win = view->win;
     auto* dm = win->AsFixed();
     ReflowCenter center = view->center;
-    int page = atoi(CStrTemp(ReflowField(data, StrL("page"))));
-    if (dm->ValidPageNo(page)) {
+    int page = ReflowInt(data, StrL("page"));
+    double x, y;
+    // The page may still be loading when the user returns to the original.
+    // Incomplete center data keeps the position captured before reflow.
+    if (dm->ValidPageNo(page) && ReflowNumber(data, StrL("x"), x) && ReflowNumber(data, StrL("y"), y) &&
+        std::abs(x) <= kReflowCoordLimit && std::abs(y) <= kReflowCoordLimit) {
         center.page = page;
-        center.glyph = atoi(CStrTemp(ReflowField(data, StrL("glyph"))));
-        center.x = atof(CStrTemp(ReflowField(data, StrL("x"))));
-        center.y = atof(CStrTemp(ReflowField(data, StrL("y"))));
+        center.glyph = ReflowInt(data, StrL("glyph"), -1);
+        center.x = x;
+        center.y = y;
     }
     view->enabled = view->closing = false;
     view->SetIsVisible(false);
     dm->cb->UpdateScrollbars(dm, dm->GetCanvasSize());
-    if (dm->ValidPageNo(center.page) && center.x >= -1e6 && center.x <= 1e6 && center.y >= -1e6 && center.y <= 1e6) {
+    if (dm->ValidPageNo(center.page) && std::abs(center.x) <= kReflowCoordLimit &&
+        std::abs(center.y) <= kReflowCoordLimit) {
         int count = 0;
         Rect* coords = nullptr;
         dm->GetEngine()->GetTextForPage(center.page, &count, &coords);
@@ -472,7 +503,7 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
                          len(cache->entries), cache->hits, file::SeekEnd(cache->handle));
         }
     } else if (str::Eq(action, StrL("page"))) {
-        int page = atoi(CStrTemp(ReflowField(data, StrL("page"))));
+        int page = ReflowInt(data, StrL("page"));
         if (page < 1 || page > view->engine->PageCount() || view->pendingPages >= 5) {
             error = 1;
             result = ReflowQuote(StrL("Invalid page or too many pending reflow pages."));
@@ -520,17 +551,17 @@ static void ReflowCall(void* ctx, Str id, Str method, Str params) {
     } else if (str::Eq(action, StrL("delete"))) {
         ContextNoteDelete(win, ReflowField(data, StrL("id")));
     } else if (str::Eq(action, StrL("position"))) {
-        int page = atoi(CStrTemp(ReflowField(data, StrL("page"))));
+        int page = ReflowInt(data, StrL("page"));
         // A queued scroll notification must not undo a newer TOC/page command.
         if (win->AsFixed()->CurrentPageNo() != view->page) ReflowDocumentLayout(win);
-        int navigation = atoi(CStrTemp(ReflowField(data, StrL("navigation"))));
+        int navigation = ReflowInt(data, StrL("navigation"), -1);
         if (navigation == view->navigation && page > 0 && page <= view->engine->PageCount() && page != view->page) {
             view->page = page;
             win->AsFixed()->GoToPage(page, false);
             NotesUpdate(win);
         }
     } else if (str::Eq(action, StrL("zoom"))) {
-        ReflowSetZoom(view, atoi(CStrTemp(ReflowField(data, StrL("zoom")))));
+        ReflowSetZoom(view, ReflowInt(data, StrL("zoom"), view->zoom));
     } else if (str::Eq(action, StrL("copy"))) {
         if (!HasPermission(Perm::CopySelection) || !view->engine->allowsCopyingText)
             error = 1;

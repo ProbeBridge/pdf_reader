@@ -34,8 +34,8 @@ export function createLibrary(container) {
     empty.textContent = query
       ? text("没有匹配的书籍", "No matching books")
       : text(
-          "书库还是空的。点击“添加本地书”选择文件，可一次添加多本。",
-          "Your library is empty. Choose “Add local books” to select one or more files.",
+          "书库还是空的。点击“添加本地书”选择文档。",
+          "Your library is empty. Choose “Add local books” to select documents.",
         );
     grid.replaceChildren();
     for (const entry of entries) {
