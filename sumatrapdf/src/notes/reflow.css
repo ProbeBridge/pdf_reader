@@ -1,12 +1,12 @@
 @import url("theme.css");
 :root {
   --font-scale: 1;
-  --reading-font: Verdana, Arial, "Noto Sans", "Microsoft YaHei", "PingFang SC", sans-serif;
-  --reading-size: 19px;
+  --reading-font: Arial, Verdana, "Noto Sans", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --reading-size: 13pt;
   --reading-line-height: 1.5;
   --reading-paragraph-gap: 1em;
-  --reading-letter-spacing: 0.02em;
-  --reading-word-spacing: 0.08em;
+  --reading-letter-spacing: 0em;
+  --reading-word-spacing: 0em;
   --reading-surface: #faf9f5;
 }
 :root[data-theme="dark"] {
@@ -108,9 +108,13 @@ main {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.page-content p {
+.page-content p,
+.page-content h3 {
   margin: 0 0 var(--reading-paragraph-gap);
   text-indent: 0;
+}
+.page-content :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 400;
 }
 .page-content h1 {
   font-size: 1.5em;
@@ -119,7 +123,7 @@ main {
   font-size: 1.3em;
 }
 .page-content h3 {
-  font-size: 1.15em;
+  font-size: 1em;
 }
 .page-content [data-source-heading] {
   display: flex;
@@ -138,6 +142,7 @@ main {
 }
 .page-content [data-source-heading] :is(p, h1, h2, h3, h4, h5, h6) {
   margin: 0;
+  font-weight: inherit;
 }
 .page-content ul[data-source-list] {
   list-style: none;

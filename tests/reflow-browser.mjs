@@ -132,6 +132,57 @@ try {
     actions.filter((a) => a.action === "page").length <= 5,
     "startup must only request a bounded page window",
   );
+  const textWeights = await page.evaluate(async () => {
+    const { safeReflowContent } = await import("/reflow-model.js"),
+      root = document.createElement("div");
+    root.className = "page-content";
+    root.append(
+      safeReflowContent(
+        "<h3>Regular thirteen-point PDF body with <b>emphasis</b>.</h3>" +
+          "<h1>Large text without explicit bold</h1>" +
+          "<h2>Medium text without explicit bold</h2>" +
+          '<div data-source-heading="true"><h3>1.1 A real section heading</h3></div>',
+      ),
+    );
+    document.querySelector("main").append(root);
+    const body = getComputedStyle(root.querySelector("h3")),
+      weights = {
+        body: body.fontWeight,
+        size: parseFloat(body.fontSize),
+        base: parseFloat(getComputedStyle(root).fontSize),
+        family: body.fontFamily,
+        large: getComputedStyle(root.querySelector("h1")).fontWeight,
+        medium: getComputedStyle(root.querySelector("h2")).fontWeight,
+        emphasis: getComputedStyle(root.querySelector("b")).fontWeight,
+        heading: getComputedStyle(
+          root.querySelector("[data-source-heading] h3"),
+        ).fontWeight,
+      };
+    root.remove();
+    return weights;
+  });
+  assert.equal(
+    textWeights.body,
+    "400",
+    "MuPDF size-based heading tags must not make prose bold",
+  );
+  assert.equal(textWeights.large, "400");
+  assert.equal(textWeights.medium, "400");
+  assert.equal(
+    textWeights.size,
+    textWeights.base,
+    "13pt source prose uses the reading size",
+  );
+  assert.ok(
+    Math.abs(textWeights.base - (13 * 96) / 72) < 0.05,
+    "Reference body size is 13pt",
+  );
+  assert.ok(
+    textWeights.family.startsWith("Arial"),
+    "Use the reference PDF's regular Arial face",
+  );
+  assert.equal(textWeights.emphasis, "700", "Keep explicit source emphasis");
+  assert.equal(textWeights.heading, "700", "Keep recognized section headings");
   await page.setViewportSize({ width: 1600, height: 900 });
   const readingLayout = await page
     .locator('.source-page[data-page="1"] .page-content')
@@ -306,7 +357,10 @@ try {
       layout.paragraph > before.height * 2,
       "font zoom must rewrap actual text",
     );
-    assert.equal(layout.font, before.font * 4);
+    assert.ok(
+      Math.abs(layout.font - before.font * 4) < 0.01,
+      "Font zoom remains fourfold with fractional CSS pixels",
+    );
     assert.ok(
       layout.marks.length >= 1,
       "source notes must be highlighted in reflow",

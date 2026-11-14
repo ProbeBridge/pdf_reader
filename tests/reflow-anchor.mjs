@@ -107,10 +107,15 @@ try {
       top: window.readingRange.getBoundingClientRect().top,
       label: document.querySelector("#page-label").textContent,
       text: window.readingRange.toString(),
+      lineHeight: parseFloat(
+        getComputedStyle(window.readingRange.startContainer.parentElement)
+          .lineHeight,
+      ),
     }));
     results.push({ mode, before, ...after });
     assert.ok(
-      Math.abs(after.top - before) <= 24,
+      // A nearby word may wrap onto an adjacent line while the visible anchor stays fixed.
+      Math.abs(after.top - before) <= Math.max(24, after.lineHeight * 1.5),
       `zoom must retain the visible source text, including after a long previous table: ${JSON.stringify(results.at(-1))}`,
     );
     await page.close();

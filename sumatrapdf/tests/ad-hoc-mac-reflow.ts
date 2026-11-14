@@ -145,8 +145,8 @@ export async function testit() {
       "reflow",
       "(()=>{const p=document.querySelector('.page-content'),s=getComputedStyle(p);return {font:parseFloat(s.fontSize),height:parseFloat(s.lineHeight),family:s.fontFamily,width:p.getBoundingClientRect().width,align:s.textAlign}})()",
     );
-    assert.ok(typography.family.startsWith("Verdana"));
-    assert.ok(typography.height >= typography.font * 1.5);
+    assert.ok(typography.family.startsWith("Arial"));
+    assert.ok(typography.height + 0.02 >= typography.font * 1.5, JSON.stringify(typography));
     assert.ok(typography.width <= typography.font * 40 + 1);
     assert.ok(["start", "left"].includes(typography.align));
     console.log("PASS visible text switch opens real PDF reflow; View menu and check state are available");
@@ -310,6 +310,38 @@ export async function testit() {
     console.log(
       "PASS native combined calendar chart renders pages, annotation count and reading time at every interval",
     );
+    for (const path of (process.env.SUMATRA_TEST_REFLOW_BOOKS || "").split("\n").filter(Boolean)) {
+      await request("TestOpenFiles", path);
+      await until(
+        () => request("TestCurrentTab"),
+        (s) => s.includes(path),
+      );
+      await request("TestInvokeCommand", "CmdToggleDocumentReflow");
+      await until(
+        () => request("TestUiState"),
+        (s) => s.includes("reflowVisible=1") && s.includes("reflowReady=1"),
+      );
+      const prose = await until(
+        async () =>
+          JSON.stringify(
+            await evaluate(
+              "reflow",
+              `(()=>{
+          const blocks=[...document.querySelectorAll('.page-content h3')]
+            .filter(e=>e.textContent.length>100&&!e.closest('[data-source-heading]'));
+          return blocks.map(e=>{const s=getComputedStyle(e);return {weight:s.fontWeight,size:parseFloat(s.fontSize),family:s.fontFamily}})
+        })()`,
+            ),
+          ),
+        (s) => s !== "[]",
+      );
+      for (const block of JSON.parse(prose)) {
+        assert.equal(block.weight, "400", "13pt source prose must not be rendered as a bold heading");
+        assert.ok(Math.abs(block.size - (13 * 96) / 72) < 0.05, "Native body text must match the 13pt reference");
+        assert.ok(block.family.startsWith("Arial"));
+      }
+      console.log("PASS reference-book native prose uses regular Arial at 13pt:", path);
+    }
     await request("Quit");
     const exit = await exited;
     assert.equal(exit.signal, null, "Native reflow shutdown must not crash");
