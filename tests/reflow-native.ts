@@ -590,7 +590,10 @@ try {
     document.querySelector("#page-label")?.textContent?.includes("400%"),
   );
   const large = await geometry(flow, "zoom400");
-  assert.equal(large.font, 72);
+  assert.ok(
+    Math.abs(large.font - initial.font * 4) < 0.02,
+    "400% zoom scales the current reading style by four",
+  );
   assert.ok(large.images[0].width >= initial.images[0].width);
   mark("TOC sidebar navigation to source page 2");
   await app.client.tocSidebarNav(2);
