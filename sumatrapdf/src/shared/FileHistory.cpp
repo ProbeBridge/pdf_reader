@@ -16,7 +16,7 @@ void HomePageInvalidateLayoutCache();
 
 // maximum number of files to remember in total
 // (to keep the settings file within reasonable bounds)
-constexpr int kFileHistoryMaxFiles = 1000;
+constexpr int kFileHistoryMaxFiles = 10000;
 
 // maximum number of most frequently used files that will be shown on the
 // Frequent Read list (space permitting)
