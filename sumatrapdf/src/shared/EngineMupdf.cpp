@@ -7650,11 +7650,74 @@ void EngineMupdf::ToggleCadEnhanceOverride() {
 // Transparent backdrop: leave unpainted samples at alpha 0 so the canvas
 // checkerboard (CmdToggleTransparencyGrid) shows through (issue #1809).
 static void ClearRenderedPagePixmap(fz_context* ctx, fz_pixmap* pix, const RenderPageArgs& args) {
+    if (args.target == RenderTarget::View && args.pageBackgroundColor != kColorUnset) {
+        Color color = args.pageBackgroundColor;
+        float rgb[] = {GetRed(color) / 255.f, GetGreen(color) / 255.f, GetBlue(color) / 255.f};
+        fz_fill_pixmap_with_color(ctx, pix, fz_device_rgb(ctx), rgb, fz_default_color_params);
+        return;
+    }
     if (args.transparentBackdrop) {
         fz_clear_pixmap(ctx, pix);
         return;
     }
     fz_clear_pixmap_with_value(ctx, pix, 0xff);
+}
+
+struct PageBackgroundDevice {
+    fz_device super;
+    fz_rect page;
+    float rgb[3];
+    bool paperBox;
+};
+
+static void PageBackgroundBegin(fz_context* ctx, fz_device* device, fz_structure type, const char* tag, int index) {
+    auto* paper = (PageBackgroundDevice*)device;
+    paper->paperBox = tag && (str::Eq(Str(tag), StrL("html")) || str::Eq(Str(tag), StrL("body")));
+    fz_begin_structure(ctx, device->passthrough, type, tag, index);
+}
+
+static void PageBackgroundEnd(fz_context* ctx, fz_device* device) {
+    ((PageBackgroundDevice*)device)->paperBox = false;
+    fz_end_structure(ctx, device->passthrough);
+}
+
+static void PageBackgroundFill(fz_context* ctx, fz_device* device, const fz_path* path, int evenOdd, fz_matrix ctm,
+                               fz_colorspace* space, const float* color, float alpha, fz_color_params params) {
+    auto* paper = (PageBackgroundDevice*)device;
+    bool paperBox = paper->paperBox;
+    paper->paperBox = false;
+    fz_rect bounds;
+    if (space && alpha >= 0.99f && fz_path_is_rect_with_bounds(ctx, path, ctm, &bounds)) {
+        fz_rect page = paper->page;
+        constexpr float kPaperTolerance = 1.f;
+        bool coversPage = bounds.x0 <= page.x0 + kPaperTolerance && bounds.y0 <= page.y0 + kPaperTolerance &&
+                          bounds.x1 >= page.x1 - kPaperTolerance && bounds.y1 >= page.y1 - kPaperTolerance;
+        if (coversPage || (paperBox && bounds.y1 - bounds.y0 > 4)) {
+            float rgb[3];
+            fz_convert_color(ctx, space, color, fz_device_rgb(ctx), rgb, nullptr, params);
+            if (rgb[0] >= 0.98f && rgb[1] >= 0.98f && rgb[2] >= 0.98f) {
+                space = fz_device_rgb(ctx);
+                color = paper->rgb;
+            }
+        }
+    }
+    fz_fill_path(ctx, device->passthrough, path, evenOdd, ctm, space, color, alpha, params);
+}
+
+// Replace white page paper and HTML/body backgrounds; never recolor text or images or relayout the book.
+static fz_device* WrapPageBackground(fz_context* ctx, fz_device* draw, const RenderPageArgs& args, fz_rect page) {
+    if (args.target != RenderTarget::View || args.pageBackgroundColor == kColorUnset) return draw;
+    auto* paper = fz_new_derived_passthrough_device(ctx, draw, PageBackgroundDevice);
+    paper->super.fill_path = PageBackgroundFill;
+    paper->super.begin_structure = PageBackgroundBegin;
+    paper->super.end_structure = PageBackgroundEnd;
+    paper->page = page;
+    Color color = args.pageBackgroundColor;
+    paper->rgb[0] = GetRed(color) / 255.f;
+    paper->rgb[1] = GetGreen(color) / 255.f;
+    paper->rgb[2] = GetBlue(color) / 255.f;
+    fz_drop_device(ctx, draw);
+    return &paper->super;
 }
 
 static void MarkTransparentBackdropPixmap(Pixmap* pixmap, bool transparentBackdrop) {
@@ -7797,6 +7860,7 @@ Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
             if (CadEnhanceActive()) {
                 dev = PdfCadEnhanceWrapDevice(ctx, dev);
             }
+            dev = WrapPageBackground(ctx, dev, args, ToFzRect(pageInfo->mediabox));
             fz_run_display_list(ctx, keptList, dev, fz_identity, pRect, fzcookie);
             if (RenderAborted(fzcookie)) {
                 UnhookAbortedDevices(drawDev, dev);
@@ -7850,6 +7914,7 @@ Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
             if (disableAntiAlias) {
                 fz_enable_device_hints(ctx, dev, FZ_DONT_INTERPOLATE_IMAGES);
             }
+            dev = WrapPageBackground(ctx, dev, args, ToFzRect(pageInfo->mediabox));
             if (hideAnnotations) {
                 pdf_run_page_contents_with_usage(ctx, pdfpage, dev, fz_identity, usageZ, fzcookie);
                 pdf_run_page_widgets_with_usage(ctx, pdfpage, dev, fz_identity, usageZ, fzcookie);
@@ -7888,6 +7953,7 @@ Pixmap* EngineMupdf::RenderPage(RenderPageArgs& args) {
             if (disableAntiAlias) {
                 fz_enable_device_hints(ctx, dev, FZ_DONT_INTERPOLATE_IMAGES);
             }
+            dev = WrapPageBackground(ctx, dev, args, ToFzRect(pageInfo->mediabox));
             fz_run_page_contents(ctx, page, dev, fz_identity, nullptr);
             fz_close_device(ctx, dev);
             fz_drop_device(ctx, dev);

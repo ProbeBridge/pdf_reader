@@ -2000,6 +2000,10 @@ static void ReplaceDocumentInCurrentTab(LoadArgs* args, DocController* ctrl, Fil
             tab->bgColorCheckered = (bgParsed->col == kColorUnset);
         }
         ParsedColor* tabColParsed = GetPrefsColor(fs->tabCol);
+        if (dmForToc) {
+            auto* paper = GetPrefsColor(fs->pageBackgroundColor);
+            AtomicIntSet(&dmForToc->GetEngine()->viewBackgroundColor, paper->parsedOk ? paper->col : kColorUnset);
+        }
         if (tabColParsed->parsedOk) {
             tab->tabColor = tabColParsed->col;
             // AddTabToWindow() copied tab->tabColor into the TabInfo before the
@@ -11384,6 +11388,14 @@ static LRESULT FrameOnCommand(MainWindow* win, HWND hwnd, UINT msg, WPARAM wp, L
 
         case CmdChangeBackgroundColor:
             ShowChangeBackgroundColorDialog(win);
+            break;
+
+        case CmdChangePageBackground:
+            ShowPageBackgroundDialog(win);
+            break;
+
+        case CmdRestorePageBackground:
+            RestorePageBackground(win);
             break;
 
         case CmdAdjustBrightness:

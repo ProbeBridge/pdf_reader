@@ -302,6 +302,8 @@ struct FileState {
     Str zoom;
     // if given, overrides the background color for this document
     ParsedColor bgCol;
+    // replaces only the page paper, preserving text, images and layout
+    ParsedColor pageBackgroundColor;
     // if given, overrides the tab color for this document
     ParsedColor tabCol;
     // visibility of the PDF's layers (optional content groups), if
@@ -1479,7 +1481,7 @@ struct FieldInfo;
 struct StructInfo;
 extern const StructInfo gFavoriteInfo;
 extern const StructInfo gFileEBookUIInfo;
-extern const FieldInfo gFileStateFields[37];
+extern const FieldInfo gFileStateFields[38];
 extern StructInfo gFileStateInfo;
 extern const StructInfo gTabStateInfo;
 extern const StructInfo gSessionDataInfo;

@@ -462,6 +462,7 @@ struct RenderPageArgs {
     // clear the page pixmap to alpha 0 so the canvas background (solid colour
     // or a checkerboard) shows through unpainted areas (issue #1809)
     bool transparentBackdrop = false;
+    Color pageBackgroundColor = kColorUnset;
     AbortCookie** cookie_out = nullptr;
     // dark/recolor rendering profile for View renders (see PdfDarkMode.h);
     // owned by the caller, only valid for the duration of RenderPage()
@@ -500,6 +501,7 @@ class EngineBase {
     // as opposed to one with fixed pages. the ebook settings only apply to
     // these, so the UI uses it to decide what to offer (#4600)
     bool isReflowable = false;
+    AtomicInt viewBackgroundColor = kColorUnset;
     bool allowsPrinting = true;
     bool allowsCopyingText = true;
     bool isPasswordProtected = false;

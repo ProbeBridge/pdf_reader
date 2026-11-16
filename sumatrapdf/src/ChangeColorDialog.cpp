@@ -18,6 +18,8 @@
 #include "AppSettings.h"
 #include "DocController.h"
 #include "EngineBase.h"
+#include "DisplayModel.h"
+#include "RenderCache.h"
 #include "Annotation.h"
 #include "AIChatTypes.h"
 #include "WindowTab.h"
@@ -648,6 +650,58 @@ void ChangeColorWnd::ApplyBackground() {
 void ChangeColorWnd::OnOk(VirtMouseEvent*) {
     TryParseEdit();
     Finish(CloseAction::Select);
+}
+
+static void PageBackgroundPicked(TabColorTarget* target, ChangeColorsArgs* args) {
+    TempStr path = str::DupTemp(target->filePath);
+    str::Free(target->filePath);
+    MainWindow* win = target->win;
+    delete target;
+    if (!args->didSelect || !IsMainWindowValidAndNotClosing(win)) return;
+    WindowTab* tab = FindTabInWindow(path, win);
+    if (!tab || !tab->AsFixed()) return;
+    FileState* fs = FileHistoryFindByPath(path);
+    if (!fs) fs = FileHistoryMarkFileLoaded(path);
+    SetColorText(fs->pageBackgroundColor, args->color == kColorUnset ? Str{} : SerializeColorTemp(args->color));
+    for (auto* window : gWindows) {
+        for (auto* other : window->Tabs()) {
+            auto* dm = other->AsFixed();
+            if (!dm || !str::EqI(other->filePath, path)) continue;
+            gRenderCache->AbortRendering(dm);
+            AtomicIntSet(&dm->GetEngine()->viewBackgroundColor, args->color);
+            gRenderCache->FreeForDisplayModel(dm);
+        }
+        MainWindowRerender(window);
+    }
+    ScheduleSaveSettings();
+}
+
+void ShowPageBackgroundDialog(MainWindow* win) {
+    auto* dm = IsMainWindowValidAndNotClosing(win) ? win->AsFixed() : nullptr;
+    if (!dm || dm->GetEngine()->kind != kindEngineMupdf) return;
+    auto* target = new TabColorTarget();
+    target->win = win;
+    target->filePath = str::Dup(win->CurrentTab()->filePath);
+    auto* args = new ChangeColorsArgs();
+    args->win = win;
+    args->title = Tr("Page background only (keep text and images)");
+    args->color = (Color)AtomicIntGet(&dm->GetEngine()->viewBackgroundColor);
+    for (Color color : {MkRgb(250, 249, 245), MkRgb(199, 237, 204), MkRgb(244, 236, 216), MkRgb(229, 239, 247)}) {
+        VecAppend(args->colors, color);
+    }
+    args->onClose = MkFunc1(PageBackgroundPicked, target);
+    ShowChangeColorsDialog(args);
+}
+
+void RestorePageBackground(MainWindow* win) {
+    auto* dm = IsMainWindowValidAndNotClosing(win) ? win->AsFixed() : nullptr;
+    if (!dm || dm->GetEngine()->kind != kindEngineMupdf) return;
+    auto* target = new TabColorTarget();
+    target->win = win;
+    target->filePath = str::Dup(win->CurrentTab()->filePath);
+    ChangeColorsArgs args;
+    args.didSelect = true;
+    PageBackgroundPicked(target, &args);
 }
 
 static void OnClose(WindowBase::CloseEvent* /*ev*/) {

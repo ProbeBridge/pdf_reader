@@ -19,6 +19,8 @@ void ShowConfigureRestrictedUseDialog(MainWindow* win);
 void OpenSettingsFileInEditor();
 TempStr AdvSettingsRowsResultTemp(Str action, int arg, int* exitCodeOut);
 void ShowChangeBackgroundColorDialog(MainWindow* win);
+void ShowPageBackgroundDialog(MainWindow* win);
+void RestorePageBackground(MainWindow* win);
 void ShowChangeLanguageDialog(MainWindow* win);
 void ShowChangeScrollbarDialog(MainWindow* win);
 void ShowChangeThemeDialog(MainWindow* win);

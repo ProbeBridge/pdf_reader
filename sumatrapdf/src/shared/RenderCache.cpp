@@ -1417,8 +1417,9 @@ static bool RenderCacheRunOne(RenderCache* cache, int threadIdx, PageRenderReque
     args.keepAlpha = true;
     args.transparentBackdrop = ShowTransparencyGrid();
     DarkModeProfile darkProfile;
+    args.pageBackgroundColor = (Color)AtomicIntGet(&engine->viewBackgroundColor);
     BuildViewDarkModeProfile(engine, &darkProfile);
-    if (darkProfile.mode != PageColorMode::Normal) {
+    if (darkProfile.mode != PageColorMode::Normal && args.pageBackgroundColor == kColorUnset) {
         args.darkProfile = &darkProfile;
     }
     // a previous render might have run a 3rd-party WIC codec that unmasked
@@ -1461,7 +1462,7 @@ static bool RenderCacheRunOne(RenderCache* cache, int threadIdx, PageRenderReque
         } else {
             recolor = ShouldUpdateBitmapColorsLegacy(engine, cache);
         }
-        if (recolor && !bmp->hasAlpha) {
+        if (recolor && !bmp->hasAlpha && args.pageBackgroundColor == kColorUnset) {
             bool preserve = profile && profile->mode == PageColorMode::PreserveImages && profile->preservePdfImages;
             Vec<Rect> skipRects;
             Vec<Rect>* skipRectsPtr = nullptr;
@@ -1697,6 +1698,7 @@ int RenderCache::Paint(
         }
         args.keepAlpha = true;
         args.transparentBackdrop = ShowTransparencyGrid();
+        args.pageBackgroundColor = (Color)AtomicIntGet(&dm->GetEngine()->viewBackgroundColor);
         Pixmap* bmp = dm->GetEngine()->RenderPage(args);
         if (AtomicBoolGet(&grayscalePageColors)) {
             bmp = GrayscalePagePixmap(bmp);

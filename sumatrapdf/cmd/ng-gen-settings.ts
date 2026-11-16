@@ -1315,6 +1315,7 @@ const fileState: Field[] = [
     "contrast of rendered pages, -100 to 100; 0 leaves them unchanged. Set with CmdAdjustContrast",
   ).ver("3.7"),
   field("BgCol", Color, "", "if given, overrides the background color for this document").ver("3.7"),
+  field("PageBackgroundColor", Color, "", "replaces only the page paper, preserving text, images and layout"),
   field("TabCol", Color, "", "if given, overrides the tab color for this document").ver("3.7"),
   field(
     "LayerStates",
@@ -1361,6 +1362,7 @@ const fileStateLayout = [
   "DisplayMode",
   "Zoom",
   "BgCol",
+  "PageBackgroundColor",
   "TabCol",
   "LayerStates",
   "MeasurementUnit",

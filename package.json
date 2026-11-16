@@ -31,6 +31,7 @@
     "test:stats": "node tests/reading-stats.mjs",
     "test:reader-native": "bun tests/reader-features-native.ts",
     "test:upgrade-native": "bun tests/notes-upgrade-native.ts",
+    "test:page-background": "bun tests/page-background-native.ts",
     "build:mac": "node scripts/build-mac.mjs",
     "install:mac": "node scripts/install-mac.mjs"
   },

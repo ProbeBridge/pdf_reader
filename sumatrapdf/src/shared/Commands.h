@@ -381,8 +381,10 @@ enum {
     CmdContextSettings = 575,
     CmdReadingHistory = 576,
     CmdToggleDocumentReflow = 577,
+    CmdChangePageBackground = 578,
+    CmdRestorePageBackground = 579,
 
-    CmdLast = 577,
+    CmdLast = 579,
     CmdFirstCustom = CmdLast + 100,
 
     // aliases, at the end to not mess ordering

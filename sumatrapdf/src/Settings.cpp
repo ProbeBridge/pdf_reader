@@ -878,6 +878,7 @@ const FieldInfo gFileStateFields[] = {
      gEnumFileStateDisplayMode, nullptr},
     {offsetof(FileState, zoom), SettingType::String, (intptr_t)"fit page"},
     {offsetof(FileState, bgCol), SettingType::Color, (intptr_t)""},
+    {offsetof(FileState, pageBackgroundColor), SettingType::Color, (intptr_t)""},
     {offsetof(FileState, tabCol), SettingType::Color, (intptr_t)""},
     {offsetof(FileState, layerStates), SettingType::String, 0},
     {offsetof(FileState, measurementUnit), SettingType::String, 0},
@@ -910,10 +911,11 @@ StructInfo gFileStateInfo = {
     sizeof(FileState),
     (u16)dimof(gFileStateFields),
     gFileStateFields,
-    "Favorites\0EBookUI\0TocState\0FilePath\0LastOpened\0DecryptionKey\0SidebarView\0DisplayMode\0Zoom\0BgCol\0TabCol\0"
-    "LayerStates\0MeasurementUnit\0MeasurementScale\0OpenCount\0PageNo\0PageCount\0Rotation\0Brightness\0Contrast\0Wind"
-    "owState\0SidebarDx\0ScrollPos\0WindowPos\0IsPinned\0IsMissing\0UseDefaultState\0ShowToc\0DisplayR2L\0UniformPageWi"
-    "dth\0TrimEmptyMargins\0UserCrop\0FreePan\0FacingStepOne\0Mirror\0ReadingAutoScrollSpeed\0ReadColumns",
+    "Favorites\0EBookUI\0TocState\0FilePath\0LastOpened\0DecryptionKey\0SidebarView\0DisplayMode\0Zoom\0BgCol\0PageBack"
+    "groundColor\0TabCol\0LayerStates\0MeasurementUnit\0MeasurementScale\0OpenCount\0PageNo\0PageCount\0Rotation\0Brigh"
+    "tness\0Contrast\0WindowState\0SidebarDx\0ScrollPos\0WindowPos\0IsPinned\0IsMissing\0UseDefaultState\0ShowToc\0Disp"
+    "layR2L\0UniformPageWidth\0TrimEmptyMargins\0UserCrop\0FreePan\0FacingStepOne\0Mirror\0ReadingAutoScrollSpeed\0Read"
+    "Columns",
     "pages of this document bookmarked in the Favorites menu\0reflowable (ebook) settings for just this document. The "
     "block is absent until you add it; a field left empty or 0 uses the global EBookUI value. The global section's "
     "WindowBgCol and DefaultDisplayMode are already per-document as BgCol and DisplayMode below\0data required to "
@@ -921,17 +923,18 @@ StructInfo gFileStateInfo = {
     "milliseconds\0data required to open a password protected document without having to ask for the password "
     "again\0what the sidebar's top panel shows: bookmarks (the default), thumbnails, favorites, signatures or "
     "layers\0layout of pages\0zoom (in %) or one of those values: fit page, fit width, fit height, fit content, fit "
-    "visible\0if given, overrides the background color for this document\0if given, overrides the tab color for this "
-    "document\0visibility of the PDF's layers (optional content groups), if changed: 1 (shown) or 0 (hidden) for each "
-    "layer, in document order\0unit name for calibrated measurements\0calibrated measurement units per document "
-    "coordinate; 0 uses points\0number of times this document has been opened recently\0number of the last read page, "
-    "or `bm:<bookmark>` for documents with chapters (folds in ReparseIdx; see PagePosition.cpp)\0number of pages in "
-    "the document when it was last open; 0 if unknown. Used to show reading progress on the home page\0how far pages "
-    "have been rotated as a multiple of 90 degrees\0brightness of rendered pages, -100 to 100; 0 leaves them "
-    "unchanged. Set with CmdAdjustBrightness\0contrast of rendered pages, -100 to 100; 0 leaves them unchanged. Set "
-    "with CmdAdjustContrast\0state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4 is minimized\0width "
-    "of the bookmarks / favorites sidebar in screen pixels, as last resized\0how far this document has been scrolled "
-    "(in x and y direction)\0default position (can be on any monitor)\0if true, the document is \"pinned\" to the "
+    "visible\0if given, overrides the background color for this document\0replaces only the page paper, preserving "
+    "text, images and layout\0if given, overrides the tab color for this document\0visibility of the PDF's layers "
+    "(optional content groups), if changed: 1 (shown) or 0 (hidden) for each layer, in document order\0unit name for "
+    "calibrated measurements\0calibrated measurement units per document coordinate; 0 uses points\0number of times "
+    "this document has been opened recently\0number of the last read page, or `bm:<bookmark>` for documents with "
+    "chapters (folds in ReparseIdx; see PagePosition.cpp)\0number of pages in the document when it was last open; 0 if "
+    "unknown. Used to show reading progress on the home page\0how far pages have been rotated as a multiple of 90 "
+    "degrees\0brightness of rendered pages, -100 to 100; 0 leaves them unchanged. Set with "
+    "CmdAdjustBrightness\0contrast of rendered pages, -100 to 100; 0 leaves them unchanged. Set with "
+    "CmdAdjustContrast\0state of the window. 1 is normal, 2 is maximized, 3 is fullscreen, 4 is minimized\0width of "
+    "the bookmarks / favorites sidebar in screen pixels, as last resized\0how far this document has been scrolled (in "
+    "x and y direction)\0default position (can be on any monitor)\0if true, the document is \"pinned\" to the "
     "Frequently Read list, so that recently opened documents don't displace it\0if true, the file is considered "
     "missing and won't be shown in any list\0if true, this document opens with the global defaults instead of the "
     "values below\0if true, show the table of contents (Bookmarks) sidebar when the document has one\0if true, the "
@@ -944,7 +947,7 @@ StructInfo gFileStateInfo = {
     "uses the global ReadingAutoScrollSpeed\0if true, scrolling reads a two-column page down its left column, then its "
     "right one (View / Read Columns)",
     false};
-static_assert(dimof(gFileStateFields) == 37);
+static_assert(dimof(gFileStateFields) == 38);
 
 static const FieldInfo gPointF_2_Fields[] = {
     {offsetof(PointF, x), SettingType::Float, (intptr_t)"0"},

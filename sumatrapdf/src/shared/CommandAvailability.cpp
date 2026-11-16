@@ -667,6 +667,11 @@ CommandVisibility GetCommandVisibility(int cmdId, const AppCommandCtx& ctx, Comm
                    : CommandVisibility::Hide;
     }
 
+    if ((cmdId == CmdChangePageBackground || cmdId == CmdRestorePageBackground) &&
+        !(ctx.isFixedPage && ctx.engineKind == kindEngineMupdf)) {
+        return CommandVisibility::Hide;
+    }
+
     // a Shortcuts / toolbar entry is a clone with its own id, so it's the
     // command it stands for that decides
     int knownEVCmdId = 0;

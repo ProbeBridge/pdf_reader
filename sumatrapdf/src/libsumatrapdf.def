@@ -198,6 +198,7 @@ EXPORTS
 
 	fz_new_device_of_size
 	fz_new_passthrough_device_of_size
+	fz_path_is_rect_with_bounds
 
 	fz_load_outline
 	fz_new_outline_iterator
@@ -927,6 +928,7 @@ EXPORTS
 	fz_pixmap_samples
 
 	fz_clear_pixmap_with_value
+	fz_fill_pixmap_with_color
 
 	fz_clear_pixmap_rect_with_value
 

@@ -1841,6 +1841,17 @@ static void BuildReadingBackgroundMenu(MainWindow* win, ToolbarHoverBuildEvent* 
     Vec<ReadingBackground> presets;
     GetReadingBackgrounds(presets);
     Vec<ToolbarHoverMenuItem> items;
+    auto* engine = win && win->AsFixed() ? win->AsFixed()->GetEngine() : nullptr;
+    if (engine && engine->kind == kindEngineMupdf) {
+        ToolbarHoverMenuItem paper;
+        paper.text = Tr("Page background only (keep text and images)...");
+        paper.cmdId = CmdChangePageBackground;
+        VecAppend(items, paper);
+        paper.text = Tr("Restore original page background");
+        paper.cmdId = CmdRestorePageBackground;
+        paper.enabled = (Color)AtomicIntGet(&engine->viewBackgroundColor) != kColorUnset;
+        VecAppend(items, paper);
+    }
     for (const auto& preset : presets) {
         ToolbarHoverMenuItem item;
         item.text = preset.selected ? fmt("✓ %s", preset.label) : preset.label;

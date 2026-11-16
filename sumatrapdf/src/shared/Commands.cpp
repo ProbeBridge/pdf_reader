@@ -387,6 +387,8 @@ const CommandInfo gCommands[] = {
     {CmdContextSettings, "CmdContextSettings\0", StrL("AI notes settings...")},
     {CmdReadingHistory, "CmdReadingHistory\0", StrL("Reading history")},
     {CmdToggleDocumentReflow, "CmdToggleDocumentReflow\0", StrL("Reflow document text")},
+    {CmdChangePageBackground, "CmdChangePageBackground\0", StrL("Page background only (keep text and images)...")},
+    {CmdRestorePageBackground, "CmdRestorePageBackground\0", StrL("Restore original page background")},
 };
 const int gCommandsCount = dimofi(gCommands);
 

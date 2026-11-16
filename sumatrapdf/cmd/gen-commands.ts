@@ -388,6 +388,8 @@ const commandsRaw = [
     "CmdContextSettings", "AI notes settings...",
     "CmdReadingHistory", "Reading history",
     "CmdToggleDocumentReflow", "Reflow document text",
+    "CmdChangePageBackground", "Page background only (keep text and images)...",
+    "CmdRestorePageBackground", "Restore original page background",
 ];
 
 // removed slots are dropped: nothing outside the generators should see them
