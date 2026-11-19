@@ -1,5 +1,15 @@
 import { dayKey } from "./history-model.js";
 
+const emptyCounts = () => ({ pages: 0, words: 0, seconds: 0, readingWords: 0, annotationWords: 0 });
+const validCount = (value) => Number.isSafeInteger(value) && value >= 0;
+function mergeWordCounts(target, source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) return;
+  for (const [key, count] of Object.entries(source))
+    if (validCount(count)) target.set(key, Math.max(target.get(key) || 0, count));
+}
+export function readingWordRatio(counts) {
+  return counts.annotationWords > 0 ? counts.readingWords / counts.annotationWords : null;
+}
 function dailyRecords(records, first, last) {
   const byDay = new Map();
   for (const [key, record] of Object.entries(records || {})) {
@@ -8,17 +18,19 @@ function dailyRecords(records, first, last) {
     if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) || date < first || date > last) continue;
     if (dayKey(new Date(`${date}T12:00:00`).getTime()) !== date) continue;
     let day = byDay.get(date);
-    if (!day) byDay.set(date, (day = { day: date, documents: new Map(), ids: new Set() }));
-    if (record.kind === "reading" && typeof record.document === "string" && record.document) {
+    if (!day) byDay.set(date, (day = { day: date, documents: new Map(), ids: new Set(), wordCounts: new Map() }));
+    if (["reading", "readingWords"].includes(record.kind) && typeof record.document === "string" && record.document) {
       let doc = day.documents.get(record.document);
-      if (!doc) day.documents.set(record.document, (doc = { pages: new Set(), seconds: 0 }));
-      for (const page of Array.isArray(record.pages) ? record.pages : [])
+      if (!doc) day.documents.set(record.document, (doc = { pages: new Set(), seconds: 0, pageWords: new Map() }));
+      for (const page of record.kind === "reading" && Array.isArray(record.pages) ? record.pages : [])
         if (Number.isInteger(page) && page > 0 && (!record.pageCount || page <= record.pageCount)) doc.pages.add(page);
+      mergeWordCounts(doc.pageWords, record.pageWords);
       const seconds = Number(record.seconds);
-      if (Number.isFinite(seconds))
+      if (record.kind === "reading" && Number.isFinite(seconds))
         doc.seconds = Math.max(doc.seconds, Math.min(90000, Math.max(0, Math.floor(seconds))));
     } else if (record.kind === "vocabulary") {
       for (const id of Array.isArray(record.ids) ? record.ids : []) if (typeof id === "string" && id) day.ids.add(id);
+      mergeWordCounts(day.wordCounts, record.wordCounts);
     }
   }
   return new Map(
@@ -29,6 +41,11 @@ function dailyRecords(records, first, last) {
         pages: [...item.documents.values()].reduce((sum, doc) => sum + doc.pages.size, 0),
         words: item.ids.size,
         seconds: [...item.documents.values()].reduce((sum, doc) => sum + doc.seconds, 0),
+        readingWords: [...item.documents.values()].reduce(
+          (sum, doc) => sum + [...doc.pages].reduce((n, page) => n + (doc.pageWords.get(String(page)) || 0), 0),
+          0,
+        ),
+        annotationWords: [...item.ids].reduce((sum, id) => sum + (item.wordCounts.get(id) || 0), 0),
       },
     ]),
   );
@@ -44,7 +61,7 @@ export function readingSummary(records, count = 14, now = Date.now()) {
     keys.push(dayKey(date.getTime()));
   }
   const data = dailyRecords(records, keys[0], keys.at(-1));
-  const daily = keys.map((day) => data.get(day) || { day, pages: 0, words: 0, seconds: 0 });
+  const daily = keys.map((day) => data.get(day) || { day, ...emptyCounts() });
   return {
     days: daily,
     today: daily.at(-1),
@@ -53,8 +70,10 @@ export function readingSummary(records, count = 14, now = Date.now()) {
         pages: sum.pages + item.pages,
         words: sum.words + item.words,
         seconds: sum.seconds + item.seconds,
+        readingWords: sum.readingWords + item.readingWords,
+        annotationWords: sum.annotationWords + item.annotationWords,
       }),
-      { pages: 0, words: 0, seconds: 0 },
+      emptyCounts(),
     ),
   };
 }
@@ -87,7 +106,15 @@ export function readingSeries(records, period = "day", now = Date.now()) {
     const start = shiftPeriod(currentStart, period, -offset);
     const end = shiftPeriod(start, period, 1);
     end.setDate(end.getDate() - 1);
-    points.push({ start: dayKey(start.getTime()), end: dayKey(end.getTime()), pages: 0, annotations: 0, seconds: 0 });
+    points.push({
+      start: dayKey(start.getTime()),
+      end: dayKey(end.getTime()),
+      pages: 0,
+      annotations: 0,
+      seconds: 0,
+      readingWords: 0,
+      annotationWords: 0,
+    });
   }
   const byStart = new Map(points.map((point) => [point.start, point]));
   const data = dailyRecords(records, points[0].start, dayKey(now));
@@ -98,18 +125,20 @@ export function readingSeries(records, period = "day", now = Date.now()) {
     point.pages += daily.pages;
     point.annotations += daily.words;
     point.seconds += daily.seconds;
+    point.readingWords += daily.readingWords;
+    point.annotationWords += daily.annotationWords;
   }
-  return {
-    period,
-    points,
-    current: points.at(-1),
-    totals: points.reduce(
-      (sum, point) => ({
-        pages: sum.pages + point.pages,
-        annotations: sum.annotations + point.annotations,
-        seconds: sum.seconds + point.seconds,
-      }),
-      { pages: 0, annotations: 0, seconds: 0 },
-    ),
-  };
+  for (const point of points) point.wordRatio = readingWordRatio(point);
+  const totals = points.reduce(
+    (sum, point) => ({
+      pages: sum.pages + point.pages,
+      annotations: sum.annotations + point.annotations,
+      seconds: sum.seconds + point.seconds,
+      readingWords: sum.readingWords + point.readingWords,
+      annotationWords: sum.annotationWords + point.annotationWords,
+    }),
+    { pages: 0, annotations: 0, seconds: 0, readingWords: 0, annotationWords: 0 },
+  );
+  totals.wordRatio = readingWordRatio(totals);
+  return { period, points, current: points.at(-1), totals };
 }

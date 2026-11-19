@@ -177,7 +177,12 @@
 .stats-axis span:last-child {
   text-align: right;
 }
+.stats-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
 .stats-table {
+  min-width: 650px;
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
@@ -212,6 +217,7 @@
     min-width: 140px;
   }
   .stats-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
   .stat-card {

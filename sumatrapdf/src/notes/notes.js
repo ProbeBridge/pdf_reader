@@ -380,7 +380,7 @@ async function runJob(key, p, a, turn = null) {
     const modelSettings = await getSettings();
     await withLock(() => persist(key, p));
     if (!turn && a._statsPending === true) {
-      await native("recordVocabulary", { id: a.id, createdAt: a.createdAt })
+      await native("recordVocabulary", { id: a.id, createdAt: a.createdAt, quote: a.quote })
         .then(() => {
           a._statsPending = false;
         })

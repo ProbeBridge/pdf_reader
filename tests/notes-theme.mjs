@@ -106,6 +106,7 @@ try {
             day: dayKey(Date.now()),
             document: "fixture",
             pages: [1, 2, 2, 3],
+            pageWords: { 1: 100, 2: 200, 3: 300 },
             seconds: 125,
             pageCount: 10,
           },
@@ -113,6 +114,7 @@ try {
             kind: "vocabulary",
             day: dayKey(Date.now()),
             ids: ["one", "two", "two"],
+            wordCounts: { one: 1, two: 2 },
           },
         };
       if (request.action === "page")
@@ -229,6 +231,19 @@ try {
     await history.locator('[data-stat="time"]').textContent(),
     locale.startsWith("zh") ? "2 分钟" : "2m",
   );
+  assert.equal(
+    await history.locator('[data-stat="readingWords"]').textContent(),
+    "600",
+  );
+  assert.equal(
+    await history.locator('[data-stat="annotationWords"]').textContent(),
+    "3",
+  );
+  assert.equal(
+    await history.locator('[data-stat="wordRatio"]').textContent(),
+    "200 : 1",
+  );
+  assert.equal(await history.locator(".stat-card").count(), 6);
   assert.equal(await history.locator(".stats-table tbody tr").count(), 14);
   assert.deepEqual(
     await history
@@ -244,6 +259,19 @@ try {
   ]) {
     await history.locator("#stats-range").selectOption(period);
     assert.equal(await history.locator(".stats-table tbody tr").count(), count);
+    assert.equal(
+      await history.locator('[data-stat="wordRatio"]').textContent(),
+      "200 : 1",
+    );
+    assert.equal(
+      await history
+        .locator(".stats-table tbody tr")
+        .first()
+        .locator("td")
+        .last()
+        .textContent(),
+      "200 : 1",
+    );
     assert.equal(await history.locator(".stats-chart").count(), 1);
     assert.equal(await history.locator(".stats-point").count(), count);
     assert.equal(await history.locator(".stats-legend-item").count(), 3);

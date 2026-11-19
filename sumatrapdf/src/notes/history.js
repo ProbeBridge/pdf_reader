@@ -20,7 +20,7 @@ function showView(view) {
   $("aside p").textContent = {
     history: text("按时间浏览读过的文档", "Documents you have opened"),
     library: text("收藏本机的书籍与文档", "Your local books and documents"),
-    stats: text("页数、注释数与阅读时间", "Pages, annotations and reading time"),
+    stats: text("阅读、注释与词数比值", "Reading, annotations and word ratio"),
   }[view];
   for (const name of ["history", "library", "stats"]) {
     $("#" + name + "-panel").hidden = view !== name;

@@ -214,6 +214,9 @@ struct ContextNotes {
     Str readingDay;
     Str readingPath;
     Vec<int> readingPages;
+    Vec<int> readingWords;
+    bool readingWordsPending = false;
+    u64 readingEpoch = 0;
     u64 readingTick = 0;
     u64 readingActivity = 0;
     u64 readingSave = 0;
@@ -480,6 +483,39 @@ static bool PutReadingStat(Str key, Str value) {
     return false;
 }
 
+static bool ReadWordCounts(Str data, Str field, StrVec& keys, Vec<int>& counts) {
+    Str segment = str::JoinTemp(StrL("/"), field);
+    json::Reader reader(data);
+    for (json::Value& value : reader) {
+        if (!json::PathMatch(value.path, segment, StrL("*")) || value.type != json::Type::Number) continue;
+        char* end = nullptr;
+        long long number = strtoll(CStrTemp(value.value), &end, 10);
+        if (!end || *end || number < 0 || number > INT_MAX) continue;
+        int count = (int)number;
+        Str key = json::PathSegKey(json::PathNth(value.path, 1));
+        if (count < 0 || len(key) == 0) continue;
+        int index = keys.Find(key);
+        if (index >= 0)
+            counts[index] = std::max(counts[index], count);
+        else {
+            keys.Append(key);
+            VecAppend(counts, count);
+        }
+    }
+    return reader.Ok();
+}
+
+static TempStr WordCountsJson(const StrVec& keys, const Vec<int>& counts) {
+    str::Builder out;
+    out.AppendChar('{');
+    for (int i = 0; i < len(keys); i++) {
+        if (i) out.AppendChar(',');
+        out.Append(fmt("%s:%d", JsonQuote(keys[i]), counts[i]));
+    }
+    out.AppendChar('}');
+    return ToStrTemp(out);
+}
+
 static bool FlushReadingStats(MainWindow* win) {
     auto* notes = win->contextNotes;
     if (!notes || !notes->readingDirty || len(notes->readingKey) == 0) return true;
@@ -502,6 +538,20 @@ static bool FlushReadingStats(MainWindow* win) {
     for (int page : notes->readingPages) {
         if (!VecContains(pages, page)) VecAppend(pages, page);
     }
+    StrVec wordPages;
+    Vec<int> wordCounts;
+    if (!ReadWordCounts(previous, StrL("pageWords"), wordPages, wordCounts)) return false;
+    for (int i = 0; i < len(notes->readingPages); i++) {
+        if (notes->readingWords[i] < 0) continue;
+        Str page = fmt("%d", notes->readingPages[i]);
+        int index = wordPages.Find(page);
+        if (index >= 0)
+            wordCounts[index] = std::max(wordCounts[index], notes->readingWords[i]);
+        else {
+            wordPages.Append(page);
+            VecAppend(wordCounts, notes->readingWords[i]);
+        }
+    }
     Str previousSeconds = JsonField(previous, StrL("seconds"));
     int seconds = previousSeconds ? std::clamp(atoi(CStrTemp(previousSeconds)), 0, kReadingDaySeconds) : 0;
     seconds = std::min(kReadingDaySeconds, seconds + (int)(notes->readingMilliseconds / 1000));
@@ -514,9 +564,10 @@ static bool FlushReadingStats(MainWindow* win) {
     list.AppendChar(']');
     Str record =
         fmt("{\"kind\":\"reading\",\"day\":%s,\"document\":%s,\"path\":%s,\"title\":%s,"
-            "\"pages\":%s,\"seconds\":%d,\"pageCount\":%d}",
+            "\"pages\":%s,\"seconds\":%d,\"pageCount\":%d,\"pageWords\":%s}",
             JsonQuote(notes->readingDay), JsonQuote(notes->readingKey), JsonQuote(notes->readingPath),
-            JsonQuote(path::GetBaseNameTemp(notes->readingPath)), ToStrTemp(list), seconds, notes->readingPageCount);
+            JsonQuote(path::GetBaseNameTemp(notes->readingPath)), ToStrTemp(list), seconds, notes->readingPageCount,
+            WordCountsJson(wordPages, wordCounts));
     if (!PutReadingStat(key, record)) return false;
     notes->readingMilliseconds %= 1000;
     notes->readingDirty = false;
@@ -524,6 +575,116 @@ static bool FlushReadingStats(MainWindow* win) {
     guard.Unlock();
     BroadcastStore(key, record);
     return true;
+}
+
+static void StartReadingWords(MainWindow* win);
+
+struct ReadingWordsTask {
+    MainWindow* win;
+    HWND frame;
+    EngineBase* engine;
+    u64 epoch;
+    Str key;
+    Str day;
+    int page;
+    int words = -2;
+    ~ReadingWordsTask() {
+        str::Free(key);
+        str::Free(day);
+    }
+};
+
+// A completed page count survives a tab switch while its extraction was running.
+static void SaveReadingWords(ReadingWordsTask* task) {
+    if (task->words < 0) return;
+    NotesStoreGuard guard;
+    if (!guard.locked) return;
+    LoadNotesStore(NotesStoreLoad::Refresh);
+    if (gStoreFailed) return;
+    Str key = fmt("stats:readingWords:%s:%s", task->day, task->key);
+    int index = gStoreKeys.Find(key);
+    Str previous = index >= 0 ? gStoreValues[index] : StrL("{}");
+    StrVec pages;
+    Vec<int> counts;
+    if (!ReadWordCounts(previous, StrL("pageWords"), pages, counts)) return;
+    Str page = fmt("%d", task->page);
+    index = pages.Find(page);
+    if (index >= 0)
+        counts[index] = std::max(counts[index], task->words);
+    else {
+        pages.Append(page);
+        VecAppend(counts, task->words);
+    }
+    Str record = fmt("{\"kind\":\"readingWords\",\"day\":%s,\"document\":%s,\"pageWords\":%s}", JsonQuote(task->day),
+                     JsonQuote(task->key), WordCountsJson(pages, counts));
+    if (!PutReadingStat(key, record)) return;
+    guard.Unlock();
+    BroadcastStore(key, record);
+}
+
+static void FinishReadingWords(ReadingWordsTask* task) {
+    if (len(gWindows) > 0) SaveReadingWords(task);
+    if (IsMainWindowValid(task->win) && NotesFrame(task->win) == task->frame) {
+        auto* n = task->win->contextNotes;
+        if (n && n->documentEpoch == task->epoch && str::Eq(n->readingKey, task->key) &&
+            str::Eq(n->readingDay, task->day)) {
+            n->readingWordsPending = false;
+            int index = VecFind(n->readingPages, task->page);
+            if (index >= 0) {
+                n->readingWords[index] = task->words;
+                n->readingDirty = true;
+                FlushReadingStats(task->win);
+            }
+            StartReadingWords(task->win);
+        }
+    }
+    delete task;
+}
+
+static void LoadReadingWords(ReadingWordsTask* task) {
+    WordCount count;
+    CountWords(task->engine->GetTextForPage(task->page), count);
+    task->words = count.words;
+    task->engine->ReleaseTextExtractionThreadContext();
+    task->engine->Release();
+    uitask::Post(MkFunc0(FinishReadingWords, task), "ReadingWords");
+    AtomicIntDec(&gDangerousThreadCount);
+}
+
+// One extraction per window; page text stays off the UI thread.
+static void StartReadingWords(MainWindow* win) {
+    auto* n = win->contextNotes;
+    auto* dm = win->AsFixed();
+    if (!n || !dm || n->readingWordsPending || !str::Eq(n->readingKey, n->documentKey) ||
+        !HasPermission(Perm::CopySelection) || !dm->GetEngine()->allowsCopyingText)
+        return;
+    int index = -1;
+    for (int i = 0; i < len(n->readingWords); i++)
+        if (n->readingWords[i] == -1) {
+            index = i;
+            break;
+        }
+    if (index < 0) return;
+    auto* task = new ReadingWordsTask{win,
+                                      NotesFrame(win),
+                                      dm->GetEngine(),
+                                      n->documentEpoch,
+                                      str::Dup(n->readingKey),
+                                      str::Dup(n->readingDay),
+                                      n->readingPages[index]};
+    n->readingWordsPending = true;
+    task->engine->AddRef();
+    AtomicIntInc(&gDangerousThreadCount);
+    ThreadHandle thread = StartThread(MkFunc0(LoadReadingWords, task), StrL("ReadingWords"));
+    if (thread) {
+        SafeCloseThreadHandle(&thread);
+        return;
+    }
+    AtomicIntDec(&gDangerousThreadCount);
+    n->readingWordsPending = false;
+    n->readingWords[index] = -2;
+    task->engine->Release();
+    delete task;
 }
 
 static void ReadingStatsTick(MainWindow* win) {
@@ -543,12 +704,16 @@ static void ReadingStatsTick(MainWindow* win) {
         return;
     }
     Str day = ReadingDayTemp();
-    if (!str::Eq(notes->readingKey, notes->documentKey) || !str::Eq(notes->readingDay, day)) {
+    if (!str::Eq(notes->readingKey, notes->documentKey) || !str::Eq(notes->readingDay, day) ||
+        notes->readingEpoch != notes->documentEpoch) {
         if (!FlushReadingStats(win)) return;
         str::ReplaceWithCopy(&notes->readingKey, notes->documentKey);
         str::ReplaceWithCopy(&notes->readingDay, day);
         str::ReplaceWithCopy(&notes->readingPath, notes->documentPath);
         VecReset(notes->readingPages);
+        VecReset(notes->readingWords);
+        notes->readingWordsPending = false;
+        notes->readingEpoch = notes->documentEpoch;
         notes->readingPage = 0;
         notes->readingMilliseconds = 0;
         notes->readingActive = false;
@@ -571,6 +736,7 @@ static void ReadingStatsTick(MainWindow* win) {
     if (page > 0 && page <= notes->readingPageCount && now - notes->readingPageSince >= kReadingPageDwellMs &&
         !VecContains(notes->readingPages, page)) {
         VecAppend(notes->readingPages, page);
+        VecAppend(notes->readingWords, -1);
         notes->readingDirty = true;
     }
     if (notes->readingActive && elapsed <= kReadingSampleMs * 2 && now - notes->readingActivity < kReadingIdleMs) {
@@ -578,10 +744,11 @@ static void ReadingStatsTick(MainWindow* win) {
         notes->readingDirty = true;
     }
     notes->readingActive = true;
+    StartReadingWords(win);
     if (notes->readingDirty && now - notes->readingSave >= kReadingSaveMs) FlushReadingStats(win);
 }
 
-static bool RecordVocabulary(Str id, Str createdAt) {
+static bool RecordVocabulary(Str id, Str createdAt, Str quote) {
     if (len(id) == 0 || len(id) > 128) return false;
     NotesStoreGuard guard;
     if (!guard.locked) return false;
@@ -602,8 +769,19 @@ static bool RecordVocabulary(Str id, Str createdAt) {
         }
         if (!reader.Ok()) return false;
     }
-    if (ids.Find(id) >= 0) return true;
-    ids.Append(id);
+    Str previous = index >= 0 ? gStoreValues[index] : StrL("{}");
+    StrVec wordIds;
+    Vec<int> wordCounts;
+    if (!ReadWordCounts(previous, StrL("wordCounts"), wordIds, wordCounts)) return false;
+    bool exists = ids.Find(id) >= 0;
+    if (exists && (len(quote) == 0 || wordIds.Find(id) >= 0)) return true;
+    if (!exists) ids.Append(id);
+    if (len(quote) > 0) {
+        WordCount count;
+        CountWords(quote, count);
+        wordIds.Append(id);
+        VecAppend(wordCounts, count.words);
+    }
     str::Builder list;
     list.AppendChar('[');
     for (int i = 0; i < len(ids); i++) {
@@ -611,7 +789,8 @@ static bool RecordVocabulary(Str id, Str createdAt) {
         list.Append(JsonQuote(ids[i]));
     }
     list.AppendChar(']');
-    Str record = fmt("{\"kind\":\"vocabulary\",\"day\":%s,\"ids\":%s}", JsonQuote(day), ToStrTemp(list));
+    Str record = fmt("{\"kind\":\"vocabulary\",\"day\":%s,\"ids\":%s,\"wordCounts\":%s}", JsonQuote(day),
+                     ToStrTemp(list), WordCountsJson(wordIds, wordCounts));
     if (!PutReadingStat(key, record)) return false;
     guard.Unlock();
     BroadcastStore(key, record);
@@ -1132,7 +1311,8 @@ static void NotesCall(void* ctx, Str id, Str method, Str params) {
             result = JsonQuote(StrL("Cannot read reading statistics."));
         }
     } else if (str::Eq(action, StrL("recordVocabulary"))) {
-        if (!RecordVocabulary(JsonField(data, StrL("id")), JsonField(data, StrL("createdAt")))) {
+        if (!RecordVocabulary(JsonField(data, StrL("id")), JsonField(data, StrL("createdAt")),
+                              JsonField(data, StrL("quote")))) {
             error = 1;
             result = JsonQuote(StrL("Cannot save vocabulary statistics."));
         }

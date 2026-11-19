@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   readingSummary,
   readingSeries,
+  readingWordRatio,
 } from "../sumatrapdf/src/notes/reading-stats-model.js";
 
 const now = new Date("2026-11-12T12:00:00").getTime();
@@ -12,6 +13,7 @@ const data = {
     day: "2026-11-12",
     document: "a",
     pages: [1, 2, 2, 0, -1, 4],
+    pageWords: { 1: 100, 2: 200, 4: 999 },
     pageCount: 3,
     seconds: 60,
   },
@@ -20,6 +22,7 @@ const data = {
     day: "2026-11-12",
     document: "a",
     pages: [2, 3],
+    pageWords: { 2: 200, 3: 300 },
     pageCount: 3,
     seconds: 90,
   },
@@ -28,29 +31,34 @@ const data = {
     day: "2026-11-12",
     document: "b",
     pages: [1],
+    pageWords: { 1: 400 },
     seconds: 35,
   },
   "stats:words:today": {
     kind: "vocabulary",
     day: "2026-11-12",
     ids: ["one", "two", "two", ""],
+    wordCounts: { one: 1, two: 1, ghost: 1000 },
   },
   "stats:words:copy": {
     kind: "vocabulary",
     day: "2026-11-12",
     ids: ["two", "three"],
+    wordCounts: { two: 1, three: 2 },
   },
   "stats:reading:previous": {
     kind: "reading",
     day: "2026-11-11",
     document: "a",
     pages: [1, 1],
+    pageWords: { 1: 150 },
     seconds: 10,
   },
   "stats:words:previous": {
     kind: "vocabulary",
     day: "2026-11-11",
     ids: ["yesterday"],
+    wordCounts: { yesterday: 3 },
   },
   "page:imported": { annotations: [{ id: "old-note", createdAt: now }] },
   "stats:words:future": {
@@ -66,8 +74,16 @@ assert.deepEqual(summary.today, {
   pages: 4,
   words: 3,
   seconds: 125,
+  readingWords: 1000,
+  annotationWords: 4,
 });
-assert.deepEqual(summary.totals, { pages: 5, words: 4, seconds: 135 });
+assert.deepEqual(summary.totals, {
+  pages: 5,
+  words: 4,
+  seconds: 135,
+  readingWords: 1150,
+  annotationWords: 7,
+});
 assert.equal(summary.days.length, 7);
 assert.equal(summary.days[0].day, "2026-11-06");
 assert.equal(summary.days[0].pages, 0);
@@ -80,6 +96,8 @@ assert.deepEqual(readingSummary({}, 14, now).totals, {
   pages: 0,
   words: 0,
   seconds: 0,
+  readingWords: 0,
+  annotationWords: 0,
 });
 assert.equal(readingSummary(null, 100000, now).days.length, 90);
 assert.equal(
@@ -97,6 +115,92 @@ assert.equal(
     now,
   ).today.seconds,
   0,
+);
+assert.equal(readingWordRatio(summary.today), 250);
+assert.equal(
+  readingWordRatio(summary.totals),
+  1150 / 7,
+  "Use the quotient of totals, not an average of daily ratios",
+);
+for (const period of ["day", "week", "month", "year"]) {
+  const series = readingSeries(data, period, now);
+  assert.equal(series.totals.readingWords, 1150);
+  assert.equal(series.totals.annotationWords, 7);
+  assert.equal(series.totals.wordRatio, 1150 / 7);
+}
+const legacy = readingSeries(
+  {
+    "stats:reading:old": {
+      kind: "reading",
+      day: "2026-11-12",
+      document: "legacy",
+      pages: [1],
+      seconds: 3,
+    },
+    "stats:words:old": { kind: "vocabulary", day: "2026-11-12", ids: ["old"] },
+  },
+  "day",
+  now,
+);
+assert.equal(legacy.current.readingWords, 0);
+assert.equal(legacy.current.annotationWords, 0);
+assert.equal(
+  legacy.current.wordRatio,
+  null,
+  "Do not invent word counts for older records",
+);
+const malformed = readingSeries(
+  {
+    "stats:reading:bad-words": {
+      kind: "reading",
+      day: "2026-11-12",
+      document: "bad",
+      pages: [1, 2, 3],
+      pageWords: { 1: -5, 2: "99", 3: 1.5, 4: 500 },
+    },
+    "stats:words:bad-words": {
+      kind: "vocabulary",
+      day: "2026-11-12",
+      ids: ["a", "b", "c"],
+      wordCounts: { a: -1, b: null, c: "3", ghost: 500 },
+    },
+  },
+  "day",
+  now,
+);
+assert.equal(malformed.current.readingWords, 0);
+assert.equal(malformed.current.annotationWords, 0);
+assert.equal(malformed.current.wordRatio, null);
+assert.equal(readingSeries({}, "day", now).current.wordRatio, null);
+const cached = readingSeries(
+  {
+    "stats:reading:visited": {
+      kind: "reading",
+      day: "2026-11-12",
+      document: "cached",
+      pages: [1],
+      pageWords: { 1: 20 },
+    },
+    "stats:readingWords:cache": {
+      kind: "readingWords",
+      day: "2026-11-12",
+      document: "cached",
+      pageWords: { 1: 20, 2: 50 },
+    },
+    "stats:readingWords:unvisited": {
+      kind: "readingWords",
+      day: "2026-11-12",
+      document: "unvisited",
+      pageWords: { 1: 100 },
+    },
+  },
+  "day",
+  now,
+);
+assert.equal(
+  cached.current.readingWords,
+  20,
+  "Cached counts join only admitted pages and are not added twice",
 );
 const calendar = {};
 for (const [day, pages, seconds, ids] of [
@@ -172,5 +276,5 @@ for (const timezone of [
   assert.equal(result.status, 0, `${timezone}: ${result.stderr}`);
 }
 console.log(
-  "PASS: daily deduplication; day/week/month/year totals; year boundaries; Monday weeks; future filtering; DST and leap days.",
+  "PASS: word counts and weighted ratios; daily deduplication; day/week/month/year totals; year boundaries; Monday weeks; future filtering; DST and leap days.",
 );

@@ -27,6 +27,8 @@ const axisDuration = (seconds) =>
   seconds >= 60 && seconds % 60
     ? text(`${Math.floor(seconds / 60)}分${seconds % 60}秒`, `${Math.floor(seconds / 60)}m ${seconds % 60}s`)
     : duration(seconds);
+const number = new Intl.NumberFormat(navigator.language, { maximumFractionDigits: 2 });
+const wordRatio = (value) => (value == null ? "—" : `${number.format(value)} : 1`);
 const chartScale = (maximum) => {
   const step = Math.max(1, 10 ** Math.floor(Math.log10(Math.max(1, maximum) / 4)));
   return Math.max(4, 4 * Math.ceil(maximum / 4 / step) * step);
@@ -57,19 +59,21 @@ export function createReadingStats(container) {
   const cards = node("div", "stats-cards"),
     charts = node("div", "stats-charts"),
     table = node("table", "stats-table"),
-    caption = node("p", "stats-caption");
+    caption = node("p", "stats-caption"),
+    tableScroll = node("div", "stats-table-scroll");
+  tableScroll.append(table);
   container.append(
     heading,
     cards,
     charts,
     caption,
-    table,
+    tableScroll,
     node(
       "p",
       "stats-explanation",
       text(
-        "同一文档同一页每天只计一次，停留至少 2 秒后计入；周从周一开始。仅前台阅读计时，连续 5 分钟未翻页或滚动时暂停。每条新建注释计一次，重新生成、追问、恢复或删除不改变历史计数。数据保存在本机，从开始使用统计功能时记录。",
-        "Each document page counts once a day after 2 seconds; weeks start on Monday. Reading time counts in the foreground and pauses after 5 minutes without scrolling or changing pages. Each new annotation counts once; regeneration, follow-ups, restoration and deletion do not change past totals. Stored locally from when statistics recording began.",
+        "同一文档同一页每天只计一次，停留至少 2 秒后计入；周从周一开始。仅前台阅读计时，连续 5 分钟未翻页或滚动时暂停。每条新建注释计一次，重新生成、追问、恢复或删除不改变历史计数。阅读词数按已读整页累计，注释词数按新增注释的选中文字累计（短语计多个词）；比值为阅读词数 ÷ 注释词数，注释词数为 0 时显示破折号。词数从本次更新后记录，旧记录缺少的词数不估算。数据保存在本机。",
+        "Each document page counts once a day after 2 seconds; weeks start on Monday. Reading time counts in the foreground and pauses after 5 minutes without scrolling or changing pages. Each new annotation counts once; regeneration, follow-ups, restoration and deletion do not change past totals. Reading words count the admitted pages in full; annotated words count the selected text of each new annotation, including all words in phrases. The ratio is reading words divided by annotated words; a dash means no annotated words. Word counts start with this update; missing historical counts are not estimated. Stored locally.",
       ),
     ),
   );
@@ -93,9 +97,30 @@ export function createReadingStats(container) {
       { key: "annotations", stat: "words", title: text("注释数", "Annotations"), format: String },
       { key: "seconds", stat: "time", title: text("阅读时间", "Reading time"), format: duration },
     ];
+    const wordMetrics = [
+      {
+        key: "readingWords",
+        stat: "readingWords",
+        title: text("阅读词数", "Words read"),
+        format: (value) => number.format(value),
+      },
+      {
+        key: "annotationWords",
+        stat: "annotationWords",
+        title: text("注释词数", "Annotated words"),
+        format: (value) => number.format(value),
+      },
+      {
+        key: "wordRatio",
+        stat: "wordRatio",
+        title: text("阅读词数 / 注释词数", "Reading / annotated words"),
+        format: wordRatio,
+      },
+    ];
+    const allMetrics = [...metrics, ...wordMetrics];
     cards.replaceChildren();
     charts.replaceChildren();
-    for (const metric of metrics) {
+    for (const metric of allMetrics) {
       const card = node("section", "stat-card"),
         number = node("strong", "", metric.format(summary.current[metric.key]));
       number.dataset.stat = metric.stat;
@@ -131,8 +156,8 @@ export function createReadingStats(container) {
         "p",
         "stats-point-detail",
         text(
-          "悬停或聚焦柱形，查看该时段的三项统计。",
-          "Hover or focus a column to see all three values for that period.",
+          "悬停或聚焦柱形，查看该时段的统计及词数比值。",
+          "Hover or focus a column to see that period’s statistics and word ratio.",
         ),
       );
     left.setAttribute("aria-hidden", "true");
@@ -145,7 +170,7 @@ export function createReadingStats(container) {
     for (const point of summary.points) {
       const column = node("button", "stats-point");
       column.type = "button";
-      const description = `${pointLabel(point, period)} · ${metrics.map((metric) => `${metric.title}: ${metric.key === "seconds" ? axisDuration(point.seconds) : metric.format(point[metric.key])}`).join(" · ")}`;
+      const description = `${pointLabel(point, period)} · ${allMetrics.map((metric) => `${metric.title}: ${metric.key === "seconds" ? axisDuration(point.seconds) : metric.format(point[metric.key])}`).join(" · ")}`;
       column.title = description;
       column.setAttribute("aria-label", description);
       column.addEventListener("mouseenter", () => {
@@ -172,13 +197,13 @@ export function createReadingStats(container) {
     chart.append(chartHeading, legend, plot, axis, detail);
     charts.append(chart);
     caption.textContent = text(
-      `${windowLabel}：共阅读 ${summary.totals.pages} 页，新增 ${summary.totals.annotations} 条注释，阅读 ${duration(summary.totals.seconds)}。`,
-      `${windowLabel}: ${summary.totals.pages} pages, ${summary.totals.annotations} annotations, ${duration(summary.totals.seconds)}.`,
+      `${windowLabel}：共阅读 ${summary.totals.pages} 页，新增 ${summary.totals.annotations} 条注释，阅读 ${duration(summary.totals.seconds)}；阅读 ${number.format(summary.totals.readingWords)} 词，注释 ${number.format(summary.totals.annotationWords)} 词，比值 ${wordRatio(summary.totals.wordRatio)}。`,
+      `${windowLabel}: ${summary.totals.pages} pages, ${summary.totals.annotations} annotations, ${duration(summary.totals.seconds)}; ${number.format(summary.totals.readingWords)} words read, ${number.format(summary.totals.annotationWords)} annotated words, ratio ${wordRatio(summary.totals.wordRatio)}.`,
     );
     const tableCaption = node("caption", "", windowLabel),
       head = node("thead"),
       row = node("tr");
-    for (const title of [text("日期", "Period"), ...metrics.map((metric) => metric.title)]) {
+    for (const title of [text("日期", "Period"), ...allMetrics.map((metric) => metric.title)]) {
       const cell = node("th", "", title);
       cell.scope = "col";
       row.append(cell);
@@ -189,7 +214,7 @@ export function createReadingStats(container) {
       const row = node("tr"),
         date = node("th", "", pointLabel(point, period));
       date.scope = "row";
-      row.append(date, ...metrics.map((metric) => node("td", "", metric.format(point[metric.key]))));
+      row.append(date, ...allMetrics.map((metric) => node("td", "", metric.format(point[metric.key]))));
       body.append(row);
     }
     table.replaceChildren(tableCaption, head, body);
